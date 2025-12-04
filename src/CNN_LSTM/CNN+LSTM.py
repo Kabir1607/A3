@@ -1,229 +1,242 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
+from PIL import Image
 import numpy as np
-import pickle
+import pandas as pd
 import os
-import time
+import pickle
 
-# --- 1. DEFINITIONS & CONFIG ---
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DATA_DIR = "data/wikiart"
-PROCESSED_DIR = "processed_data"
-ANNOTATIONS = pd.read_csv("data/annotations/artemis_dataset_release_v0.csv")
-IMG_TRANSFORM = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
+# ==========================================
+# 1. CONFIGURATION & GPU CHECK
+# ==========================================
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(SCRIPT_DIR)
+PROCESSED_DIR = os.path.join(SCRIPT_DIR, "processed_data")
+RESULTS_DIR = os.path.join(SCRIPT_DIR, "CNN_LSTM_Results")
 
-# Load Metadata
-with open(f'{PROCESSED_DIR}/vocab.pkl', 'rb') as f:
-    VOCAB = pickle.load(f)
-with open(f'{PROCESSED_DIR}/splits.pkl', 'rb') as f:
-    SPLITS = pickle.load(f)
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# --- 2. DATASET CLASS ---
+# --- GPU DIAGNOSTIC ---
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+    print(f"\n✅ GPU DETECTED: {torch.cuda.get_device_name(0)}")
+    print(f"   VRAM Available: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB\n")
+    PIN_MEMORY = True # Faster CPU->GPU transfer
+else:
+    DEVICE = torch.device("cpu")
+    PIN_MEMORY = False
+    print("\n⚠️  GPU NOT DETECTED! Training will be slow.")
+    print("   Run this command to fix it:")
+    print("   pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu118\n")
+
+BATCH_SIZE = 32
+EPOCHS = 5
+EMBED_DIM = 256
+HIDDEN_DIM = 256
+
+# --- PATH FINDING ---
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+possible_data_paths = [
+    os.path.join(PROJECT_ROOT, "Initial_Artworks_folder"),
+    os.path.join(PROJECT_ROOT, "Data", "wikiart"),
+    os.path.join(SCRIPT_DIR, "wikiart")
+]
+DATA_ROOT = next((p for p in possible_data_paths if os.path.exists(p)), None)
+
+if DATA_ROOT:
+    print(f"Training Data Source: {DATA_ROOT}")
+else:
+    print("WARNING: Image folder not found. Check paths.")
+
+# ==========================================
+# 2. DATASET CLASS
+# ==========================================
 class ArtDataset(Dataset):
-    def __init__(self, indices, transform=None):
-        self.indices = indices
-        self.full_ds = datasets.ImageFolder(root=DATA_DIR, transform=transform)
-        # Create a mapping from index to caption (simplified)
-        # In real scenario, map image filename to caption row in CSV
-        self.captions = ANNOTATIONS['utterance'].tolist() 
+    def __init__(self, dataframe_path, transform=None):
+        self.df = pd.read_pickle(dataframe_path)
+        self.transform = transform
         
     def __len__(self):
-        return len(self.indices)
+        return len(self.df)
     
     def __getitem__(self, idx):
-        # Retrieve image using the subset index
-        real_idx = self.indices[idx]
-        img, _ = self.full_ds[real_idx]
+        row = self.df.iloc[idx]
+        try:
+            image = Image.open(row['abs_image_path']).convert("RGB")
+        except:
+            image = Image.new('RGB', (224, 224)) # Fallback
+            
+        if self.transform:
+            image = self.transform(image)
         
-        # Get Caption (Naive implementation: assumes CSV aligns with ImageFolder sorted order)
-        # WARNING: Ensure CSV matches ImageFolder logic. 
-        # For assignment safety, we tokenize on the fly here:
-        caption_text = str(self.captions[real_idx]).lower()
-        tokens = [VOCAB.get(t, VOCAB['<unk>']) for t in re.sub(r'[^\w\s]','',caption_text).split()]
-        tokens = [VOCAB['<start>']] + tokens[:18] + [VOCAB['<end>']]
-        
-        # Pad
-        seq = torch.ones(20, dtype=torch.long) * VOCAB['<pad>']
-        seq[:len(tokens)] = torch.tensor(tokens)
-        
-        return img, seq
+        caption = torch.tensor(row['sequence'], dtype=torch.long)
+        return image, caption
 
-# --- 3. MODEL ARCHITECTURE  ---
-
+# ==========================================
+# 3. MODEL ARCHITECTURE
+# ==========================================
 class EncoderCNN(nn.Module):
-    """Custom CNN from scratch """
     def __init__(self, embed_size):
         super(EncoderCNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, 3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, 3, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.relu = nn.ReLU()
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(3, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2),
+            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2),
+            nn.Conv2d(64, 128, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2),
+            nn.Conv2d(128, 256, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2),
+        )
         self.flatten = nn.Flatten()
-        # Image is 224x224 -> pool -> 112 -> pool -> 56 -> pool -> 28
-        # 128 channels * 28 * 28
-        self.fc = nn.Linear(128 * 28 * 28, embed_size)
+        self.fc = nn.Linear(256 * 14 * 14, embed_size)
+        self.relu = nn.ReLU()
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, images):
-        x = self.pool(self.relu(self.conv1(images)))
-        x = self.pool(self.relu(self.conv2(x)))
-        x = self.pool(self.relu(self.conv3(x)))
-        x = self.flatten(x)
-        x = self.dropout(x)
-        features = self.fc(x)
-        return features
+        features = self.conv_layers(images)
+        features = self.flatten(features)
+        features = self.fc(features)
+        return self.relu(features)
 
-class DecoderRNN(nn.Module):
-    """LSTM Decoder [cite: 2579]"""
-    def __init__(self, embed_size, hidden_size, vocab_size, embed_matrix=None):
-        super(DecoderRNN, self).__init__()
+class DecoderLSTM(nn.Module):
+    def __init__(self, embed_size, hidden_size, vocab_size, num_layers=1, embed_matrix=None):
+        super(DecoderLSTM, self).__init__()
         
-        # Embedding Layer
         self.embed = nn.Embedding(vocab_size, embed_size)
+        
         if embed_matrix is not None:
-            # Load pre-trained weights [cite: 2571]
-            # Ensure dimension match (SVD/GloVe might vary)
-            if embed_matrix.shape[1] != embed_size:
-                # Project if dims mismatch (e.g. FastText 300 -> 256)
-                self.project_emb = nn.Linear(embed_matrix.shape[1], embed_size)
-                self.raw_embed_weights = torch.tensor(embed_matrix, dtype=torch.float32).to(DEVICE)
+            matrix_dim = embed_matrix.shape[1]
+            if matrix_dim != embed_size:
+                # If dimensions differ (e.g. 200 vs 256), learn a projection
+                self.project_emb = nn.Linear(matrix_dim, embed_size)
+                # IMPORTANT: register_buffer ensures this moves to GPU automatically
+                self.register_buffer("raw_embed_weights", torch.tensor(embed_matrix, dtype=torch.float32))
                 self.use_projection = True
             else:
-                self.embed.weight = nn.Parameter(torch.tensor(embed_matrix, dtype=torch.float32))
-                self.embed.weight.requires_grad = False # Non-trainable
+                self.embed = nn.Embedding.from_pretrained(torch.tensor(embed_matrix, dtype=torch.float32), freeze=True)
                 self.use_projection = False
         else:
             self.use_projection = False
-
-        self.lstm = nn.LSTM(embed_size, hidden_size, batch_first=True)
+            
+        self.lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
         self.linear = nn.Linear(hidden_size, vocab_size)
-        self.dropout = nn.Dropout(0.5)
-
+    
     def forward(self, features, captions):
-        # Embed captions
+        captions = captions[:, :-1] # Remove <end> token
+        
         if self.use_projection:
-            # Manual lookup and projection for mismatched dims
-            embs = torch.nn.functional.embedding(captions, self.raw_embed_weights)
-            embeddings = self.project_emb(embs)
+            # Manual lookup on the buffer
+            raw_emb = torch.nn.functional.embedding(captions, self.raw_embed_weights)
+            embeddings = self.project_emb(raw_emb)
         else:
             embeddings = self.embed(captions)
-
-        embeddings = self.dropout(embeddings)
-        
-        # Concatenate image features as the "start" of the sequence (standard captioning trick)
-        # features shape: (batch, embed_size) -> (batch, 1, embed_size)
+            
         features = features.unsqueeze(1)
-        
-        # Input to LSTM: Image + Words (excluding <end>)
-        inputs = torch.cat((features, embeddings[:, :-1, :]), dim=1)
+        inputs = torch.cat((features, embeddings), dim=1)
         
         hiddens, _ = self.lstm(inputs)
         outputs = self.linear(hiddens)
         return outputs
 
-class ImageCaptionModel(nn.Module):
-    def __init__(self, embed_size, hidden_size, vocab_size, embed_matrix=None):
-        super().__init__()
+class CNNtoLSTM(nn.Module):
+    def __init__(self, embed_size, hidden_size, vocab_size, num_layers, embed_matrix=None):
+        super(CNNtoLSTM, self).__init__()
         self.encoder = EncoderCNN(embed_size)
-        self.decoder = DecoderRNN(embed_size, hidden_size, vocab_size, embed_matrix)
+        self.decoder = DecoderLSTM(embed_size, hidden_size, vocab_size, num_layers, embed_matrix)
     
     def forward(self, images, captions):
         features = self.encoder(images)
         outputs = self.decoder(features, captions)
         return outputs
 
-# --- 4. TRAINING ENGINE ---
-
-def train_epoch(model, loader, criterion, optimizer):
-    model.train()
-    total_loss = 0
-    for images, captions in loader:
-        images, captions = images.to(DEVICE), captions.to(DEVICE)
-        
-        optimizer.zero_grad()
-        outputs = model(images, captions)
-        
-        # Calculate loss (Output: Batch, Seq, Vocab) -> (Batch*Seq, Vocab)
-        # Target: (Batch, Seq) -> (Batch*Seq)
-        loss = criterion(outputs.reshape(-1, outputs.shape[2]), captions.reshape(-1))
-        
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()
-    return total_loss / len(loader)
-
-def validate(model, loader, criterion):
-    model.eval()
-    total_loss = 0
-    with torch.no_grad():
-        for images, captions in loader:
-            images, captions = images.to(DEVICE), captions.to(DEVICE)
-            outputs = model(images, captions)
-            loss = criterion(outputs.reshape(-1, outputs.shape[2]), captions.reshape(-1))
-            total_loss += loss.item()
-    return total_loss / len(loader)
-
-# --- 5. HYPERPARAMETER TESTING LOOP  ---
-
-def run_experiments():
-    # Load processed embeddings
-    emb_glove = np.load(f'{PROCESSED_DIR}/emb_glove.npy')
-    emb_fasttext = np.load(f'{PROCESSED_DIR}/emb_fasttext.npy')
-    emb_tfidf = np.load(f'{PROCESSED_DIR}/emb_tfidf.npy')
-
-    # Experiment Configs
-    embeddings = {
-        'GloVe': (emb_glove, 200),
-        'FastText': (emb_fasttext, 300), # Dim mismatch handled in model
-        'TF-IDF': (emb_tfidf, 200)
-    }
+# ==========================================
+# 4. TRAINING FUNCTION
+# ==========================================
+def train_model(model_name, embed_matrix, train_loader, val_loader, vocab_size):
+    print(f"\n--- Training Configuration: {model_name} ---")
     
-    hidden_sizes = [256] # Keep it simple for demo, add [128] if time permits
+    model = CNNtoLSTM(EMBED_DIM, HIDDEN_DIM, vocab_size, num_layers=1, embed_matrix=embed_matrix).to(DEVICE)
+    criterion = nn.CrossEntropyLoss(ignore_index=0) 
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
     
     best_val_loss = float('inf')
-    best_model_name = ""
+    history = []
 
-    # Data Loaders
-    train_data = ArtDataset(SPLITS['train'], IMG_TRANSFORM)
-    val_data = ArtDataset(SPLITS['val'], IMG_TRANSFORM)
-    train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=32)
-
-    results = []
-
-    print(f"Starting Experiments on {DEVICE}...")
-
-    for emb_name, (emb_matrix, emb_dim) in embeddings.items():
-        for hidden_dim in hidden_sizes:
-            print(f"\n--- Training: {emb_name} | Hidden: {hidden_dim} ---")
+    for epoch in range(EPOCHS):
+        model.train()
+        train_loss = 0
+        for imgs, caps in train_loader:
+            imgs, caps = imgs.to(DEVICE), caps.to(DEVICE)
+            optimizer.zero_grad()
             
-            # Note: We generally match the CNN output size to the Embedding dim
-            model = ImageCaptionModel(embed_size=256, hidden_size=hidden_dim, vocab_size=len(VOCAB), embed_matrix=emb_matrix).to(DEVICE)
+            outputs = model(imgs, caps)
+            loss = criterion(outputs.reshape(-1, vocab_size), caps.reshape(-1))
             
-            criterion = nn.CrossEntropyLoss(ignore_index=VOCAB['<pad>'])
-            optimizer = optim.Adam(model.parameters(), lr=0.001)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
             
-            # Short training loop for selection
-            for epoch in range(2): # Run more epochs (e.g., 10) in reality
-                loss = train_epoch(model, train_loader, criterion, optimizer)
-                val_loss = validate(model, val_loader, criterion)
-                print(f"Epoch {epoch+1}: Train Loss {loss:.4f}, Val Loss {val_loss:.4f}")
-            
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_model_name = f"{emb_name}_h{hidden_dim}"
-                torch.save(model.state_dict(), "best_model.pth")
-            
-            results.append({'model': f"{emb_name}_{hidden_dim}", 'val_loss': val_loss})
+        # Validation
+        model.eval()
+        val_loss = 0
+        with torch.no_grad():
+            for imgs, caps in val_loader:
+                imgs, caps = imgs.to(DEVICE), caps.to(DEVICE)
+                outputs = model(imgs, caps)
+                val_loss += criterion(outputs.reshape(-1, vocab_size), caps.reshape(-1)).item()
+        
+        avg_train = train_loss / len(train_loader)
+        avg_val = val_loss / len(val_loader)
+        print(f"Epoch {epoch+1}/{EPOCHS} | Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f}")
+        
+        if avg_val < best_val_loss:
+            best_val_loss = avg_val
+            save_path = os.path.join(RESULTS_DIR, f"model_{model_name}_best.pth")
+            torch.save(model.state_dict(), save_path)
 
-    print(f"\nBest Model: {best_model_name} with Loss: {best_val_loss}")
-    return results
+    return best_val_loss
 
+# ==========================================
+# 5. MAIN EXECUTION
+# ==========================================
 if __name__ == "__main__":
-    import re 
-    import pandas as pd 
-    run_experiments()
+    print("--- Starting CNN + LSTM Hyperparameter Testing ---")
+    
+    transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
+    
+    # Use pin_memory=True for GPU speedup
+    train_loader = DataLoader(ArtDataset(os.path.join(PROCESSED_DIR, "train_data.pkl"), transform), 
+                              batch_size=BATCH_SIZE, shuffle=True, pin_memory=PIN_MEMORY)
+    val_loader = DataLoader(ArtDataset(os.path.join(PROCESSED_DIR, "val_data.pkl"), transform), 
+                            batch_size=BATCH_SIZE, pin_memory=PIN_MEMORY)
+    
+    with open(os.path.join(PROCESSED_DIR, "vocab.pkl"), "rb") as f:
+        vocab = pickle.load(f)
+    
+    embeddings_to_test = {}
+    try: embeddings_to_test['TF-IDF'] = np.load(os.path.join(PROCESSED_DIR, "emb_tfidf_pca.npy"))
+    except: print("TF-IDF matrix not found.")
+    try: embeddings_to_test['GloVe'] = np.load(os.path.join(PROCESSED_DIR, "emb_glove.npy"))
+    except: print("GloVe matrix not found.")
+    try: embeddings_to_test['FastText'] = np.load(os.path.join(PROCESSED_DIR, "emb_fasttext.npy"))
+    except: print("FastText matrix not found.")
+
+    results_log = []
+    best_overall_loss = float('inf')
+    best_embedding_type = ""
+    
+    for name, matrix in embeddings_to_test.items():
+        val_loss = train_model(name, matrix, train_loader, val_loader, len(vocab))
+        results_log.append(f"Model: {name} | Best Val Loss: {val_loss:.4f}")
+        
+        if val_loss < best_overall_loss:
+            best_overall_loss = val_loss
+            best_embedding_type = name
+            
+    log_path = os.path.join(RESULTS_DIR, "tuning_results.txt")
+    with open(log_path, "w") as f:
+        f.write("CNN + LSTM RESULTS\n======================\n")
+        for line in results_log: f.write(line + "\n")
+        f.write(f"\nWINNER: {best_embedding_type}\n")
+
+    print(f"\n>>> Winner: {best_embedding_type}. Saved to {RESULTS_DIR}")
