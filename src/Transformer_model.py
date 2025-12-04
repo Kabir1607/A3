@@ -7,7 +7,7 @@ import os
 import ast
 import re
 import pickle
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+import math
 
 # ==========================================
 # 1. CONFIGURATION
@@ -21,7 +21,6 @@ TEST_CSV = os.path.join(DATA_DIR, "test_split.csv")
 TOKENIZER_PATH = os.path.join(DATA_DIR, "tokenizer.pkl")
 MODEL_PATH = os.path.join(DATA_DIR, "best_transformer_model.keras")
 
-# Ensure Results folder exists
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 IMAGE_SIZE = 224
@@ -30,46 +29,35 @@ NUM_PATCHES = (IMAGE_SIZE // PATCH_SIZE) ** 2
 VOCAB_SIZE = 8001
 MAX_LEN = 40
 
-# HYPERPARAMETERS (Fixed from your best Tuning Trial)
-EMBED_DIM = 192
-NUM_HEADS = 4
-FF_DIM = 128
+# --- HYPERPARAMETERS ---
+EMBED_DIM = 64
+NUM_HEADS = 2
+FF_DIM = 64
 NUM_LAYERS = 2
-DROPOUT = 0.3      # Increased slightly to prevent "her her her" loops
-LEARNING_RATE = 3e-4 # Slower learning rate for stability
+DROPOUT = 0.4
+LEARNING_RATE = 1e-3
 
 # ==========================================
-# 2. CUSTOM METRICS (THE FIX)
+# 2. CUSTOM METRICS
 # ==========================================
 def masked_loss(y_true, y_pred):
-    # Calculate standard loss
     loss_obj = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=False, reduction='none'
     )
     loss = loss_obj(y_true, y_pred)
-    
-    # Create mask: 1 for words, 0 for padding
     mask = tf.math.logical_not(tf.math.equal(y_true, 0))
     mask = tf.cast(mask, dtype=loss.dtype)
-    
-    # Multiply loss by mask (zeros out the padding error)
     loss *= mask
-    
-    # Average only over non-zero elements
     return tf.reduce_sum(loss) / tf.reduce_sum(mask)
 
 def masked_accuracy(y_true, y_pred):
     y_true = tf.cast(y_true, dtype='int64')
     pred_id = tf.argmax(y_pred, axis=-1)
-    
     correct = tf.math.equal(y_true, pred_id)
     mask = tf.math.logical_not(tf.math.equal(y_true, 0))
-    
     correct = tf.math.logical_and(correct, mask)
-    
     correct = tf.cast(correct, dtype='float32')
     mask = tf.cast(mask, dtype='float32')
-    
     return tf.reduce_sum(correct) / tf.reduce_sum(mask)
 
 # ==========================================
@@ -157,15 +145,12 @@ def transformer_encoder_block(inputs, head_size, num_heads, ff_dim, dropout=0):
     return x + res
 
 def transformer_decoder_block(inputs, context, head_size, num_heads, ff_dim, dropout=0):
-    # 1. Self Attention (CAUSAL)
     x = layers.LayerNormalization(epsilon=1e-6)(inputs)
     x = layers.MultiHeadAttention(key_dim=head_size, num_heads=num_heads, dropout=dropout)(x, x, use_causal_mask=True)
     res = x + inputs
-    # 2. Cross Attention
     x = layers.LayerNormalization(epsilon=1e-6)(res)
     x = layers.MultiHeadAttention(key_dim=head_size, num_heads=num_heads, dropout=dropout)(x, context)
     res = x + res
-    # 3. Feed Forward
     x = layers.LayerNormalization(epsilon=1e-6)(res)
     x = layers.Conv1D(filters=ff_dim, kernel_size=1, activation="relu")(x)
     x = layers.Dropout(dropout)(x)
@@ -184,7 +169,7 @@ def build_transformer():
             encoded_patches, head_size=EMBED_DIM, num_heads=NUM_HEADS, ff_dim=FF_DIM, dropout=DROPOUT
         )
 
-    caption_embed = layers.Embedding(VOCAB_SIZE, EMBED_DIM)(caption_input)
+    caption_embed = layers.Embedding(VOCAB_SIZE, EMBED_DIM, mask_zero=True)(caption_input)
     positions = tf.range(start=0, limit=MAX_LEN, delta=1)
     pos_embed = layers.Embedding(input_dim=MAX_LEN, output_dim=EMBED_DIM)(positions)
     caption_final = caption_embed + pos_embed
@@ -198,49 +183,93 @@ def build_transformer():
     outputs = layers.Dense(VOCAB_SIZE, activation="softmax")(caption_final)
 
     model = keras.Model(inputs=[image_input, caption_input], outputs=outputs)
-    
-    # COMPILE WITH MASKED LOSS
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=LEARNING_RATE),
-        loss=masked_loss,       # <--- The fix
-        metrics=[masked_accuracy] # <--- The fix
+        loss=masked_loss,
+        metrics=[masked_accuracy]
     )
     return model
 
 # ==========================================
-# 5. EVALUATION
+# 5. BEAM SEARCH GENERATION (THE FIX)
 # ==========================================
 def _load_tokenizer():
     with open(TOKENIZER_PATH, "rb") as f:
         return pickle.load(f)
 
-def generate_caption(model, tokenizer, image_path):
+def beam_search_caption(model, tokenizer, image_path, beam_width=3, alpha=0.7):
+    """
+    Beam Search with Length Penalty (alpha).
+    alpha: 0.6-0.9 encourages concise captions.
+    """
     img = load_image(image_path)
     img = tf.expand_dims(img, axis=0)
     
     start_id = tokenizer.word_index.get("<start>")
     end_id = tokenizer.word_index.get("<end>")
     
-    output = [start_id]
+    # Sequence: (log_prob, [tokens])
+    sequences = [[0.0, [start_id]]]
+    
     for _ in range(MAX_LEN):
-        cap_seq = tf.constant(output)
-        pad_len = MAX_LEN - tf.shape(cap_seq)[0]
-        cap_in = tf.pad(cap_seq, [[0, pad_len]])
-        cap_in = tf.expand_dims(cap_in, 0)
+        all_candidates = []
         
-        preds = model.predict([img, cap_in], verbose=0)
-        idx = len(output) - 1
-        logits = preds[0, idx, :]
-        next_id = int(np.argmax(logits))
+        for score, seq in sequences:
+            # If sequence ended, keep it
+            if seq[-1] == end_id:
+                all_candidates.append([score, seq])
+                continue
+            
+            # Predict next token
+            cap_seq = tf.constant(seq)
+            pad_len = MAX_LEN - tf.shape(cap_seq)[0]
+            cap_in = tf.pad(cap_seq, [[0, pad_len]])
+            cap_in = tf.expand_dims(cap_in, 0)
+            
+            preds = model.predict([img, cap_in], verbose=0)
+            logits = preds[0, len(seq)-1, :]
+            
+            # Repetition Penalty (Soft)
+            if len(seq) > 1: logits[seq[-1]] -= 10.0 # Discourage repeating immediate word
+            
+            # Get Top K candidates
+            top_k_indices = np.argsort(logits)[-beam_width:]
+            
+            for idx in top_k_indices:
+                # Add log probability (math.log for stability)
+                prob = logits[idx]
+                # Softmax approx (simplified for beam) or just use logits score
+                candidate_score = score + prob 
+                candidate_seq = seq + [idx]
+                all_candidates.append([candidate_score, candidate_seq])
         
-        if next_id == end_id: break
-        output.append(next_id)
+        # Select top K sequences
+        ordered = sorted(all_candidates, key=lambda x: x[0], reverse=True)
+        sequences = ordered[:beam_width]
         
-    words = [tokenizer.index_word.get(i, "") for i in output[1:]]
+        # Stop if all top sequences have ended
+        if all(seq[1][-1] == end_id for seq in sequences):
+            break
+            
+    # Select best sequence with Length Normalization
+    # Score = log_prob / (length ^ alpha)
+    best_score = -float('inf')
+    best_seq = None
+    
+    for score, seq in sequences:
+        # Length penalty calculation
+        length_penalty = math.pow(len(seq), alpha)
+        normalized_score = score / length_penalty
+        
+        if normalized_score > best_score:
+            best_score = normalized_score
+            best_seq = seq
+            
+    words = [tokenizer.index_word.get(i, "") for i in best_seq if i not in [start_id, end_id]]
     return " ".join(words)
 
 def evaluate_test_set(model):
-    df = pd.read_csv(TEST_CSV).head(10) # 10 Samples
+    df = pd.read_csv(TEST_CSV).head(10)
     df["full_path"] = df["image_path"].apply(lambda x: os.path.join(IMG_DIR, str(x)))
     df = df[df["full_path"].apply(os.path.exists)]
     
@@ -248,10 +277,11 @@ def evaluate_test_set(model):
     results_path = os.path.join(RESULTS_DIR, "final_transformer_examples.txt")
     
     with open(results_path, "w") as f:
-        f.write("FINAL EVALUATION (MASKED LOSS FIX)\n=================================\n")
-        print("\n--- Generating Examples ---")
+        f.write("FINAL EVALUATION (BEAM SEARCH WIDTH=3)\n========================================\n")
+        print("\n--- Generating Examples with Beam Search ---")
         for _, row in df.iterrows():
-            pred = generate_caption(model, tokenizer, row["full_path"])
+            # Use Beam Search instead of greedy
+            pred = beam_search_caption(model, tokenizer, row["full_path"], beam_width=3)
             log = f"Style: {row['art_style']}\nRef: {row['utterance']}\nPred: {pred}\n{'-'*40}\n"
             print(log)
             f.write(log)
@@ -261,21 +291,19 @@ def evaluate_test_set(model):
 # 6. MAIN EXECUTION
 # ==========================================
 if __name__ == "__main__":
-    print("--- 1. Training with MASKED LOSS ---")
+    print("--- 1. Training Smaller Model ---")
     BATCH_SIZE = 32
     train_ds = make_dataset(TRAIN_CSV, BATCH_SIZE)
     val_ds = make_dataset(VAL_CSV, BATCH_SIZE)
 
     model = build_transformer()
     
-    # Train for 15 epochs to ensure convergence with low LR
+    # Train for 10 epochs
     model.fit(
-        train_ds, validation_data=val_ds, epochs=15,
+        train_ds, validation_data=val_ds, epochs=10,
         callbacks=[keras.callbacks.EarlyStopping(patience=3, restore_best_weights=True)]
     )
     
-    # Note: Saving with custom metrics requires registering them on load
-    # For now, we save weights to be safe
     model.save(MODEL_PATH)
     print(f"Model saved to {MODEL_PATH}")
 

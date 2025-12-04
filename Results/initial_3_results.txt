@@ -1,0 +1,38 @@
+FINAL EVALUATION (MASKED LOSS FIX)
+=================================
+Style: New_Realism
+Ref: I feel amusement when I look at the painting because all of these children playing in the park seem to be having a good time.
+Pred: sure what what what this her her her her her her her her her her her her her her her her her the her painting her is her a her little her very her very her very her very her
+----------------------------------------
+Style: Realism
+Ref: It seems badly painted such that the food looks gross.
+Pred: sure what what her her her her her her her her her the her painting her is her a her little her girl her is her a her little her <unk> her
+----------------------------------------
+Style: Impressionism
+Ref: it looks as though there are fun festivities going on with dancing, music and romance
+Pred: sure what what what this her her her her her her her her her her her her her her her her her the her painting her is her a her little her very her very her very her very her
+----------------------------------------
+Style: Baroque
+Ref: It is very dark, the head of the carriage(?) she is on looks evil and menacing, and there are three mysterious looking men that seem to be pulling her into darkness to die. Almost all of the image is black except for the woman, who is very brightly painted. It makes me feel as if something pure is being pulled into disease, corruption, or death.
+Pred: sure what what her her her her her her her her her the her painting her is her a her little her girl her is her a her little her man her
+----------------------------------------
+Style: Action_painting
+Ref: This makes me feel overwhelmed with all the different kinds and colours of strokes. The colour ranges from dark black to bright yellow so it is too much going on.
+Pred: sure what what what this what i her her her her her her her her her her her her her her her the her colors her are her a her very her very her very her very her very her
+----------------------------------------
+Style: Realism
+Ref: The grey haired man looks very scientific and wise.
+Pred: sure what what what this her her her her her her her her her her her her her her her her her the her colors her are her a her very her very her very her very her very her
+----------------------------------------
+Style: Impressionism
+Ref: He reminds of an artist admiring the painting he just did of the woman with the umbrella he is stepping back to see if he captured everything
+Pred: sure what what her her her her her her her her her the her painting her is her a her lot her of her a her little her man her
+----------------------------------------
+Style: Synthetic_Cubism
+Ref: Looks like garbage, like discarded carboard
+Pred: sure what what what this her her her her her her her her her her her her her her her her her the her painting her is her a her very her very her very her very her very her
+----------------------------------------
+Style: Realism
+Ref: It doesn't make me feel anything specific. I like the lines in the work.
+Pred: sure what what what this what i her her her her her i her don't her like her the her colors her are her a her very her very her very her very her very her very her very her
+----------------------------------------

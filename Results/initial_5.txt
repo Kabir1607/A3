@@ -1,0 +1,27 @@
+Ref: I feel amusement when I look at the painting because all of these children playing in the park seem to be having a good time.
+Pred: looks like looks is like looks a the very the very a like the a the lot a of a the looks painting the is a very a like a the looks and a looks like looks a like a
+----------------------------------------
+Ref: It seems badly painted such that the food looks gross.
+Pred: looks like looks the like looks a the very the very a like the a the little a painting the is the a the very a very a like the a is painting looks is a the a is a
+----------------------------------------
+Ref: it looks as though there are fun festivities going on with dancing, music and romance
+Pred: looks like looks is like looks a the very the very a like the a the lot a of a the looks painting the is a very a like a the looks and a looks like looks is like a
+----------------------------------------
+Ref: It is very dark, the head of the carriage(?) she is on looks evil and menacing, and there are three mysterious looking men that seem to be pulling her into darkness to die. Almost all of the image is black except for the woman, who is very brightly painted. It makes me feel as if something pure is being pulled into disease, corruption, or death.
+Pred: looks like looks the like looks a the dark the and the looks the like the a the dark the and the it the is the a the is the a is painting looks is a the is a is
+----------------------------------------
+Ref: This makes me feel overwhelmed with all the different kinds and colours of strokes. The colour ranges from dark black to bright yellow so it is too much going on.
+Pred: looks like looks is like looks a like very a very a like i a i lot like confused like i like am like see like the i picture like am a like the i like am a like the
+----------------------------------------
+Ref: The grey haired man looks very scientific and wise.
+Pred: looks like looks is like looks a the very a very a like the a the lot a of a the a colors the and a the looks a is a is very a looks very a is a like
+----------------------------------------
+Ref: He reminds of an artist admiring the painting he just did of the woman with the umbrella he is stepping back to see if he captured everything
+Pred: looks like looks the like looks a is dark the and the a the dark the and the it the is the a is and the a the is the a is painting looks is the is the a is
+----------------------------------------
+Ref: Looks like garbage, like discarded carboard
+Pred: looks like looks is like looks a the very a very a like the a the lot a of a the looks and a very a very a like a the a painting looks is a the a and a
+----------------------------------------
+Ref: It doesn't make me feel anything specific. I like the lines in the work.
+Pred: looks like looks is like looks a i very a very a like the a the lot a of a the a colors the and a the looks a is a the very a the a the a and a
+----------------------------------------

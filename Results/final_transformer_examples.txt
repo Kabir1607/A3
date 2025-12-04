@@ -1,0 +1,38 @@
+FINAL EVALUATION (BEAM SEARCH WIDTH=3)
+========================================
+Style: New_Realism
+Ref: I feel amusement when I look at the painting because all of these children playing in the park seem to be having a good time.
+Pred: the a the red the red woman the looks the like red the woman the red woman the is colors is woman looks the like the a red woman looks is colors like looks the red woman looks woman the
+----------------------------------------
+Style: Realism
+Ref: It seems badly painted such that the food looks gross.
+Pred: the a the red the red woman the makes the it red looks makes like the a red woman the is red a the woman the is red woman the man the is the a red woman a red woman
+----------------------------------------
+Style: Impressionism
+Ref: it looks as though there are fun festivities going on with dancing, music and romance
+Pred: the a the woman the red woman the looks the like red the woman the black woman the is colors is woman looks the like the a red woman looks is colors like looks a looks woman looks woman the
+----------------------------------------
+Style: Baroque
+Ref: It is very dark, the head of the carriage(?) she is on looks evil and menacing, and there are three mysterious looking men that seem to be pulling her into darkness to die. Almost all of the image is black except for the woman, who is very brightly painted. It makes me feel as if something pure is being pulled into disease, corruption, or death.
+Pred: the i the her love her love her the her people her look her like her a her sense her of her the her darkness her of her the her darkness her of her the her darkness her
+----------------------------------------
+Style: Action_painting
+Ref: This makes me feel overwhelmed with all the different kinds and colours of strokes. The colour ranges from dark black to bright yellow so it is too much going on.
+Pred: the a the color the colors lines the and lines colors lines the colors lines the and lines the colors lines the and lines the colors lines the and the lines the and lines the colors lines the lines colors
+----------------------------------------
+Style: Realism
+Ref: The grey haired man looks very scientific and wise.
+Pred: the a the woman the colors woman the looks the like colors the woman the looks woman the is colors is woman looks the like the a red lines looks and colors like looks the red lines is woman the
+----------------------------------------
+Style: Impressionism
+Ref: He reminds of an artist admiring the painting he just did of the woman with the umbrella he is stepping back to see if he captured everything
+Pred: the a the woman the red woman the looks the like man the woman the dark woman the is dark looks is like red the looks face the and makes the red man the is red dark is woman the
+----------------------------------------
+Style: Synthetic_Cubism
+Ref: Looks like garbage, like discarded carboard
+Pred: the a the red the red woman the looks the like red the woman the red colors lines are colors and red the red lines the and lines and makes the colors lines the and lines are the lines the
+----------------------------------------
+Style: Realism
+Ref: It doesn't make me feel anything specific. I like the lines in the work.
+Pred: the a the red the colors lines the and lines the colors lines colors lines colors lines colors and lines colors lines and the blue the and colors lines the blue lines the blue lines blue lines the lines blue
+----------------------------------------

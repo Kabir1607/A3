@@ -1,0 +1,38 @@
+FINAL EVALUATION (SMALL MODEL + REPETITION FIX)
+=================================
+Style: New_Realism
+Ref: I feel amusement when I look at the painting because all of these children playing in the park seem to be having a good time.
+Pred: looks like a the man a is a very is calming a
+----------------------------------------
+Style: Realism
+Ref: It seems badly painted such that the food looks gross.
+Pred: the is a very dark and colors and colors and of colors and colors and colors and colors the and red and makes colors lines background and colors red and colors lines background and are and of and are background
+----------------------------------------
+Style: Impressionism
+Ref: it looks as though there are fun festivities going on with dancing, music and romance
+Pred: looks like a the man a is a very is calming a
+----------------------------------------
+Style: Baroque
+Ref: It is very dark, the head of the carriage(?) she is on looks evil and menacing, and there are three mysterious looking men that seem to be pulling her into darkness to die. Almost all of the image is black except for the woman, who is very brightly painted. It makes me feel as if something pure is being pulled into disease, corruption, or death.
+Pred: looks like a her a her a her a her man her he her is her a her man her is her a her man her
+----------------------------------------
+Style: Action_painting
+Ref: This makes me feel overwhelmed with all the different kinds and colours of strokes. The colour ranges from dark black to bright yellow so it is too much going on.
+Pred: the is a bright colors and are a pleasing and to are  are  are and  are  are to  are  are  are to are  are  are  are  are to 
+----------------------------------------
+Style: Realism
+Ref: The grey haired man looks very scientific and wise.
+Pred: looks like a the man a is a very is calming a
+----------------------------------------
+Style: Impressionism
+Ref: He reminds of an artist admiring the painting he just did of the woman with the umbrella he is stepping back to see if he captured everything
+Pred: looks like a the man a is her a her a her lonely her
+----------------------------------------
+Style: Synthetic_Cubism
+Ref: Looks like garbage, like discarded carboard
+Pred: looks like a the man a is a very is calming a
+----------------------------------------
+Style: Realism
+Ref: It doesn't make me feel anything specific. I like the lines in the work.
+Pred: looks like a the man a is a very is calming a
+----------------------------------------
