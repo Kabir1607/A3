@@ -1,0 +1,39 @@
+TRANSFORMER HYPERPARAMETER TUNING RESULTS
+=========================================
+
+Trial #1
+  Trial ID: 0
+  Status  : FAILED
+  Score   : None
+  Hyperparameters:
+    - embed_dim: 128
+    - num_heads: 4
+    - ff_dim: 64
+    - num_layers: 2
+    - dropout: 0.2
+    - lr: 0.0005
+----------------------------------------
+Trial #2
+  Trial ID: 1
+  Status  : FAILED
+  Score   : None
+  Hyperparameters:
+    - embed_dim: 256
+    - num_heads: 2
+    - ff_dim: 64
+    - num_layers: 2
+    - dropout: 0.2
+    - lr: 0.001
+----------------------------------------
+Trial #3
+  Trial ID: 2
+  Status  : COMPLETED
+  Score   : 0.8765451312065125
+  Hyperparameters:
+    - embed_dim: 128
+    - num_heads: 8
+    - ff_dim: 256
+    - num_layers: 2
+    - dropout: 0.1
+    - lr: 0.0005
+----------------------------------------

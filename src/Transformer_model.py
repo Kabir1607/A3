@@ -38,14 +38,20 @@ def load_image(img_path):
 
 def make_dataset(csv_path, batch_size):
     df = pd.read_csv(csv_path)
-    
+
+    # Drop rows whose image file does not exist (robust to missing/deleted artworks)
+    df["full_image_path"] = df["image_path"].apply(
+        lambda x: os.path.join(IMG_DIR, str(x))
+    )
+    df = df[df["full_image_path"].apply(os.path.exists)].reset_index(drop=True)
+
     # Robust Parser: Extracts numbers even if format is messy
     def parse_sequence(s):
         return [int(x) for x in re.findall(r'\d+', str(s))]
     
-    df['caption_seq'] = df['caption_seq'].apply(parse_sequence)
-    
-    image_paths = df['image_path'].apply(lambda x: os.path.join(IMG_DIR, x)).values
+    df["caption_seq"] = df["caption_seq"].apply(parse_sequence)
+
+    image_paths = df["full_image_path"].values
     captions = list(df['caption_seq'].values)
 
     # --- SAFETY FIX: TRUNCATE SEQUENCES ---
@@ -211,24 +217,31 @@ if __name__ == "__main__":
 
     print("\n--- Saving Results ---")
     results_path = os.path.join(RESULTS_DIR, "transformer_tuning_results.txt")
-    
-    all_trials = tuner.oracle.get_best_trials(num_trials=10)
-    
+
+    # Collect ALL trials (including failed ones) for a complete log
+    all_trials = list(tuner.oracle.trials.values())
+
     with open(results_path, "w") as f:
         f.write("TRANSFORMER HYPERPARAMETER TUNING RESULTS\n")
         f.write("=========================================\n\n")
         for i, trial in enumerate(all_trials):
-            f.write(f"Rank: {i+1}\n")
-            f.write(f"Trial ID: {trial.trial_id}\n")
-            f.write(f"Validation Accuracy: {trial.score:.4f}\n")
-            f.write("Hyperparameters:\n")
+            f.write(f"Trial #{i+1}\n")
+            f.write(f"  Trial ID: {trial.trial_id}\n")
+            f.write(f"  Status  : {trial.status}\n")
+            f.write(f"  Score   : {trial.score}\n")
+            f.write("  Hyperparameters:\n")
             for hp, value in trial.hyperparameters.values.items():
-                f.write(f"  - {hp}: {value}\n")
-            f.write("-" * 30 + "\n")
-            
+                f.write(f"    - {hp}: {value}\n")
+            f.write("-" * 40 + "\n")
+
     print(f"Detailed results saved to {results_path}")
 
-    best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
-    best_model = tuner.hypermodel.build(best_hps)
-    best_model.save(os.path.join(DATA_DIR, "best_transformer_model.keras"))
-    print("Best model saved to ../Data/best_transformer_model.keras")
+    # Save best model only if at least one successful trial exists
+    successful_trials = [t for t in all_trials if t.score is not None]
+    if successful_trials:
+        best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
+        best_model = tuner.hypermodel.build(best_hps)
+        best_model.save(os.path.join(DATA_DIR, "best_transformer_model.keras"))
+        print("Best model saved to ../Data/best_transformer_model.keras")
+    else:
+        print("No successful trials to save a best model from.")
