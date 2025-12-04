@@ -5,7 +5,8 @@ import keras_tuner as kt
 import numpy as np
 import pandas as pd
 import os
-import re  # <--- Added for robust parsing
+import ast
+import re
 
 # ==========================================
 # 1. CONFIGURATION
@@ -16,6 +17,7 @@ RESULTS_DIR = os.path.join("..", "Results")
 TRAIN_CSV = os.path.join(DATA_DIR, "train_split.csv")
 VAL_CSV = os.path.join(DATA_DIR, "val_split.csv")
 
+# Create Results Directory
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 IMAGE_SIZE = 224
@@ -25,7 +27,7 @@ VOCAB_SIZE = 8001
 MAX_LEN = 40
 
 # ==========================================
-# 2. DATA PIPELINE (Fixed)
+# 2. DATA PIPELINE
 # ==========================================
 def load_image(img_path):
     img = tf.io.read_file(img_path)
@@ -37,19 +39,21 @@ def load_image(img_path):
 def make_dataset(csv_path, batch_size):
     df = pd.read_csv(csv_path)
     
-    # --- ROBUST PARSER FIX ---
-    # Instead of ast.literal_eval, we use Regex to find all numbers
-    # This works even if the string is "array([1, 2])" or "[1, 2]"
+    # Robust Parser: Extracts numbers even if format is messy
     def parse_sequence(s):
         return [int(x) for x in re.findall(r'\d+', str(s))]
     
     df['caption_seq'] = df['caption_seq'].apply(parse_sequence)
-    # -------------------------
     
     image_paths = df['image_path'].apply(lambda x: os.path.join(IMG_DIR, x)).values
     captions = list(df['caption_seq'].values)
 
-    # Split into Input and Target (Teacher Forcing)
+    # --- SAFETY FIX: TRUNCATE SEQUENCES ---
+    # Ensure no sequence exceeds MAX_LEN before processing
+    # This prevents the "Negative Padding" crash
+    captions = [c[:MAX_LEN] for c in captions] 
+    # --------------------------------------
+
     cap_in = [c[:-1] for c in captions]
     cap_out = [c[1:] for c in captions]
 
@@ -57,10 +61,13 @@ def make_dataset(csv_path, batch_size):
 
     def map_func(img_path, c_in, c_out):
         img = load_image(img_path)
-        # Pad dynamically to ensure shape consistency
-        c_in = tf.pad(c_in, [[0, MAX_LEN - tf.shape(c_in)[0]]])
-        c_out = tf.pad(c_out, [[0, MAX_LEN - tf.shape(c_out)[0]]])
-        # Force shape set
+        # Dynamic padding calculation
+        padding_in = MAX_LEN - tf.shape(c_in)[0]
+        padding_out = MAX_LEN - tf.shape(c_out)[0]
+        
+        c_in = tf.pad(c_in, [[0, padding_in]])
+        c_out = tf.pad(c_out, [[0, padding_out]])
+        
         c_in = tf.ensure_shape(c_in, [MAX_LEN])
         c_out = tf.ensure_shape(c_out, [MAX_LEN])
         return (img, c_in), c_out
@@ -131,6 +138,7 @@ def transformer_decoder_block(inputs, context, head_size, num_heads, ff_dim, dro
 # 4. BUILD MODEL (Keras Tuner)
 # ==========================================
 def build_model(hp):
+    # Tunable Params
     embed_dim = hp.Int('embed_dim', min_value=64, max_value=256, step=64)
     num_heads = hp.Choice('num_heads', values=[2, 4, 8])
     ff_dim = hp.Int('ff_dim', min_value=64, max_value=256, step=64)
@@ -138,9 +146,11 @@ def build_model(hp):
     dropout_rate = hp.Float('dropout', min_value=0.1, max_value=0.3, step=0.1)
     learning_rate = hp.Choice('lr', values=[1e-3, 5e-4])
 
+    # Inputs
     image_input = layers.Input(shape=(IMAGE_SIZE, IMAGE_SIZE, 3))
     caption_input = layers.Input(shape=(MAX_LEN,))
 
+    # Image Encoding
     patches = Patches(PATCH_SIZE)(image_input)
     encoded_patches = PatchEncoder(NUM_PATCHES, embed_dim)(patches)
 
@@ -149,6 +159,7 @@ def build_model(hp):
             encoded_patches, head_size=embed_dim, num_heads=num_heads, ff_dim=ff_dim, dropout=dropout_rate
         )
 
+    # Text Encoding
     caption_embed = layers.Embedding(VOCAB_SIZE, embed_dim)(caption_input)
     positions = tf.range(start=0, limit=MAX_LEN, delta=1)
     pos_embed = layers.Embedding(input_dim=MAX_LEN, output_dim=embed_dim)(positions)
@@ -171,13 +182,12 @@ def build_model(hp):
     return model
 
 # ==========================================
-# 5. EXECUTION
+# 5. EXECUTION & LOGGING
 # ==========================================
 if __name__ == "__main__":
     print("--- Starting Keras Tuner ---")
     
     BATCH_SIZE = 32
-    # Ensure CPU/GPU doesn't OOM with data loading
     train_ds = make_dataset(TRAIN_CSV, BATCH_SIZE)
     val_ds = make_dataset(VAL_CSV, BATCH_SIZE)
 
@@ -187,7 +197,7 @@ if __name__ == "__main__":
         max_trials=3,           
         executions_per_trial=1, 
         directory='tuner_dir',  
-        project_name='artemis_transformer_tuning_v2'
+        project_name='artemis_transformer_tuning_v3'
     )
 
     tuner.search_space_summary()
@@ -218,7 +228,6 @@ if __name__ == "__main__":
             
     print(f"Detailed results saved to {results_path}")
 
-    # Save Best Model
     best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
     best_model = tuner.hypermodel.build(best_hps)
     best_model.save(os.path.join(DATA_DIR, "best_transformer_model.keras"))
