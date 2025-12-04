@@ -1,0 +1,53 @@
+FINAL TRANSFORMER EVALUATION EXAMPLES
+=====================================
+
+Style: High_Renaissance
+Emotion: awe
+Ref:  It looks like something from Di Vinci some sort of plans.  He was definitely ahead of his time.
+Pred: her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her
+----------------------------------------
+Style: Analytical_Cubism
+Emotion: something else
+Ref:  This makes me feel disjointed and confused, it is a portrait of a man who has fallen to pieces, he doesnt know what to do in life.
+Pred: her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her
+----------------------------------------
+Style: Abstract_Expressionism
+Emotion: something else
+Ref:  This appears to be part of a horse's head perhaps surrounded by vibrant color.
+Pred: her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her
+----------------------------------------
+Style: Synthetic_Cubism
+Emotion: contentment
+Ref:  The modernist shapes, and motifs bring happiness.
+Pred: her her her her her her the her dark her colors her are her so her dark her and her the her way her the her way her the her way her the her face her
+----------------------------------------
+Style: Baroque
+Emotion: contentment
+Ref:  The women seem to be nurturing and consoling one another during a time of hardship.
+Pred: her her her her her her the her dark her colors her are her so her dark her and her the her way her the her way her the her way her the her face her is her a
+----------------------------------------
+Style: Baroque
+Emotion: sadness
+Ref:  The mans eyes look very sad, the painting is very dark and somber.
+Pred: her her her her her her looks her like her he her is her a her little her <unk> her
+----------------------------------------
+Style: Baroque
+Emotion: fear
+Ref:  The darkness and tall tress give a spooky feel.
+Pred: her her her her her her the her dark her and her the her face her is her very her dark her and her the her man her
+----------------------------------------
+Style: High_Renaissance
+Emotion: sadness
+Ref:  This is so sad the person is missing a head and the colors are so grim.
+Pred: her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her
+----------------------------------------
+Style: Fauvism
+Emotion: excitement
+Ref:  All these colors set beside the blue ocen produces the playful feeling of excitment one gets on holiday.
+Pred: her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her
+----------------------------------------
+Style: New_Realism
+Emotion: something else
+Ref:  It feels like the end of a cycle. A little melancholic
+Pred: her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her her
+----------------------------------------
