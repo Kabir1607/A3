@@ -1,12 +1,14 @@
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Dict, Set
 
 import pandas as pd
 
 
 # Dropping artworks that are not both in ArtEmis and Wikiart dataset: 
-# As in, ifan artwork is not both in the csv file and a correspondong Artwork does not exist, if both are not there, then either drop that row in the csv, or delete that file in the Artworks folder: 
+# As in, if an artwork is not both in the csv file and a correspondong Artwork does not exist, if both are not there, then either drop that row in the csv, or delete that file in the Artworks folder: 
 # Essenstially, make sure that there is a 1-1 mapping between the artworks in the csv file (dont count repetitions of the same artwork) and the artworks in the Artworks folder.
 # save the new csv as: "initial_dataset.csv" in the Data folder and the new Artworks folder as: "Initial_Artworks_folder": 
 
@@ -26,9 +28,13 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
 def _collect_artemis_paintings(csv_path: str = ORIG_CSV) -> Set[str]:
     """Return the set of unique painting IDs present in the ArtEmis CSV."""
-    df = pd.read_csv(csv_path)
-    # Paintings are identified by the `painting` column.
-    return set(df["painting"].unique())
+    df = pd.read_csv(
+        csv_path,
+        usecols=["painting"],
+        dtype={"painting": "string"},
+        low_memory=False,
+    )
+    return set(df["painting"].dropna().unique())
 
 
 def _collect_wikiart_files(root_dir: str = ARTWORKS_ROOT) -> Dict[str, str]:
@@ -68,9 +74,19 @@ def build_initial_dataset(
     of the same painting in the CSV).
     """
     # Load CSV and collect unique painting ids
-    df = pd.read_csv(csv_in)
+    df = pd.read_csv(
+        csv_in,
+        dtype={
+            "art_style": "category",
+            "painting": "string",
+            "emotion": "category",
+            "utterance": "string",
+            "repetition": "int16",
+        },
+        low_memory=False,
+    )
     original_rows = len(df)
-    artemis_paintings = set(df["painting"].unique())
+    artemis_paintings = set(df["painting"].dropna().unique())
 
     # Map available image files (without extension) to their paths
     wikiart_mapping = _collect_wikiart_files(artworks_root)
@@ -91,23 +107,34 @@ def build_initial_dataset(
 
     # Prepare new artworks folder
     if os.path.exists(artworks_out_root):
-        # Remove previous output to avoid mixing stale files
         shutil.rmtree(artworks_out_root)
     os.makedirs(artworks_out_root, exist_ok=True)
 
-    # Copy each valid painting image to the new folder, preserving style subfolder
+    # Pre-create destination style folders once
+    style_dirs: Dict[str, str] = {}
+    painting_to_style: Dict[str, str] = {}
     for painting_id in valid_paintings:
         src_path = wikiart_mapping[painting_id]
-
-        # style is the immediate sub-folder under Artworks
         rel_from_root = os.path.relpath(src_path, artworks_root)
         style_name = rel_from_root.split(os.sep)[0]
+        painting_to_style[painting_id] = style_name
+        if style_name not in style_dirs:
+            dst_style_dir = os.path.join(artworks_out_root, style_name)
+            os.makedirs(dst_style_dir, exist_ok=True)
+            style_dirs[style_name] = dst_style_dir
 
-        dst_style_dir = os.path.join(artworks_out_root, style_name)
-        os.makedirs(dst_style_dir, exist_ok=True)
-
-        dst_path = os.path.join(dst_style_dir, os.path.basename(src_path))
+    # Copy artworks in parallel to leverage I/O concurrency
+    def _copy_artwork(painting_id: str) -> None:
+        src_path = wikiart_mapping[painting_id]
+        style_name = painting_to_style[painting_id]
+        dst_path = os.path.join(
+            style_dirs[style_name], os.path.basename(src_path)
+        )
         shutil.copy2(src_path, dst_path)
+
+    max_workers = min(32, (os.cpu_count() or 4))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor.map(_copy_artwork, valid_paintings)
 
     # Console summary
     print(f"Filtered CSV written to: {csv_out}")
