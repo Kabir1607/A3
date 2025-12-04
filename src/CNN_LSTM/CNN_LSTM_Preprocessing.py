@@ -1,159 +1,160 @@
 import os
+import re
+import torch
 import pickle
 import numpy as np
 import pandas as pd
-import re
 from collections import Counter
+from torchvision import datasets, transforms
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
 from sklearn.model_selection import train_test_split
-import torch
-from torchvision import transforms
 
-# --- CONFIGURATION ---
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # src/
-DATA_DIR = os.path.join(BASE_DIR, "..", "Data")
-IMG_DIR = os.path.join(BASE_DIR, "..", "Initial_Artworks_folder")
-INPUT_CSV = os.path.join(DATA_DIR, "artemis_10k_sampled.csv")
+# --- 1. PATH CONFIGURATION ---
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR)) 
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "processed_data")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Output paths
-PROCESSED_DIR = os.path.join(BASE_DIR, "CNN_LSTM", "processed_data")
-os.makedirs(PROCESSED_DIR, exist_ok=True)
+# A. FIND IMAGES
+possible_data_paths = [
+    os.path.join(SCRIPT_DIR, "Initial_Artworks_folder"),
+    os.path.join(PROJECT_ROOT, "Initial_Artworks_folder"),
+    os.path.join(PROJECT_ROOT, "Data", "wikiart"),
+    os.path.join(SCRIPT_DIR, "wikiart")
+]
+DATA_ROOT = next((p for p in possible_data_paths if os.path.exists(p)), None)
 
-# Embedding Paths (Adjust these filenames if yours differ!)
-GLOVE_FILE = os.path.join(DATA_DIR, "embeddings", "glove.6B.200d.txt")
-FASTTEXT_FILE = os.path.join(DATA_DIR, "embeddings", "wiki-news-300d-1M.vec") 
+if DATA_ROOT is None:
+    print("⚠️  WARNING: Could not find 'Initial_Artworks_folder'. Creating empty placeholder.")
+    DATA_ROOT = os.path.join(SCRIPT_DIR, "Initial_Artworks_folder")
+    os.makedirs(DATA_ROOT, exist_ok=True)
+else:
+    print(f"✅ Found Images at: {DATA_ROOT}")
+
+# B. FIND ANNOTATIONS (OPTIMIZED)
+# Check for the SAMPLED 10k file first to speed up processing
+possible_csv_paths = [
+    os.path.join(PROJECT_ROOT, "Data", "artemis_10k_sampled.csv"), # <--- Priority 1
+    os.path.join(SCRIPT_DIR, "artemis_10k_sampled.csv"),           # <--- Priority 2
+    os.path.join(PROJECT_ROOT, "Data", "artemis_dataset_release_v0.csv") # Fallback (Slow)
+]
+ANNOTATIONS_PATH = next((p for p in possible_csv_paths if os.path.exists(p)), None)
+print(f"✅ Using Annotations: {ANNOTATIONS_PATH}")
+
+# C. FIND EMBEDDINGS
+possible_glove = [
+    os.path.join(SCRIPT_DIR, "glove.6B.200d.txt"),
+    os.path.join(PROJECT_ROOT, "Data", "embeddings", "glove.6B.200d.txt")
+]
+GLOVE_PATH = next((p for p in possible_glove if os.path.exists(p)), None)
+
+possible_fasttext = [
+    os.path.join(SCRIPT_DIR, "wiki-news-300d-1M.vec"),
+    os.path.join(PROJECT_ROOT, "Data", "embeddings", "wiki-news-300d-1M.vec")
+]
+FASTTEXT_PATH = next((p for p in possible_fasttext if os.path.exists(p)), None)
 
 VOCAB_SIZE = 5000
 MAX_SEQ_LEN = 20
 
-# --- 1. LOAD DATA ---
-print("Loading Dataset...")
-if not os.path.exists(INPUT_CSV):
-    print(f"Error: Could not find {INPUT_CSV}. Please run EDA script first.")
-    exit()
+# --- 2. IMAGE SPLIT ---
+print("\n--- 1. Processing Images ---")
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+])
+
+try:
+    dataset = datasets.ImageFolder(root=DATA_ROOT, transform=transform)
+    indices = list(range(len(dataset)))
+    train_idx, temp_idx = train_test_split(indices, test_size=0.2, random_state=42)
+    val_idx, test_idx = train_test_split(temp_idx, test_size=0.5, random_state=42)
     
-df = pd.read_csv(INPUT_CSV)
-print(f"Loaded {len(df)} captions.")
+    splits = {'train': train_idx, 'val': val_idx, 'test': test_idx}
+    with open(os.path.join(OUTPUT_DIR, 'splits.pkl'), 'wb') as f:
+        pickle.dump(splits, f)
+    print(f"Splits Created: Train={len(train_idx)}, Val={len(val_idx)}, Test={len(test_idx)}")
+except Exception as e:
+    print(f"⚠️  Skipping Image processing (Data structure issue?): {e}")
+    # Create dummy splits
+    splits = {'train': [], 'val': [], 'test': []}
+    with open(os.path.join(OUTPUT_DIR, 'splits.pkl'), 'wb') as f:
+        pickle.dump(splits, f)
 
-# --- 2. TEXT CLEANING & VOCAB ---
-print("Building Vocabulary...")
-def clean_text(text):
-    text = str(text).lower()
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text) # Remove punctuation
-    return text.split()
-
-# Count words
-all_words = []
-for caption in df['utterance']:
-    all_words.extend(clean_text(caption))
-
-word_counts = Counter(all_words)
-most_common = word_counts.most_common(VOCAB_SIZE - 4) # Reserve 4 spots for specials
-
-# Create Mappings
-vocab = {"<pad>": 0, "<start>": 1, "<end>": 2, "<unk>": 3}
-for word, _ in most_common:
-    vocab[word] = len(vocab)
-
-print(f"Vocabulary Size: {len(vocab)}")
-with open(os.path.join(PROCESSED_DIR, "vocab.pkl"), "wb") as f:
-    pickle.dump(vocab, f)
-
-# --- 3. PREPARE SEQUENCES ---
-print("Tokenizing sequences...")
-sequences = []
-for caption in df['utterance']:
-    words = clean_text(caption)
-    # Start + Words + End
-    seq = [1] + [vocab.get(w, 3) for w in words] + [2]
+# --- 3. TEXT PREPROCESSING ---
+print("\n--- 2. Processing Text ---")
+if ANNOTATIONS_PATH:
+    df = pd.read_csv(ANNOTATIONS_PATH)
     
-    # Pad or Truncate
-    if len(seq) < MAX_SEQ_LEN:
-        seq += [0] * (MAX_SEQ_LEN - len(seq))
+    def clean_text(text):
+        text = str(text).lower()
+        text = re.sub(r'[^\w\s]', '', text)
+        return text.split()
+
+    all_tokens = []
+    for caption in df['utterance']:
+        all_tokens.extend(clean_text(caption))
+
+    counter = Counter(all_tokens)
+    most_common = counter.most_common(VOCAB_SIZE - 4)
+    vocab = {'<pad>': 0, '<start>': 1, '<end>': 2, '<unk>': 3}
+    for token, _ in most_common:
+        vocab[token] = len(vocab)
+
+    with open(os.path.join(OUTPUT_DIR, 'vocab.pkl'), 'wb') as f:
+        pickle.dump(vocab, f)
+    print(f"Vocabulary Built: {len(vocab)} tokens")
+
+    # --- 4. EMBEDDINGS ---
+    def load_vectors(fname, vocab, dim):
+        print(f"Loading {os.path.basename(fname)}...")
+        matrix = np.zeros((len(vocab), dim))
+        with open(fname, 'r', encoding='utf-8', errors='ignore') as f:
+            # FastText check
+            first_line = f.readline().split()
+            if len(first_line) != dim + 1:
+                 f.seek(0) 
+
+            for line in f:
+                tokens = line.rstrip().split(' ')
+                word = tokens[0]
+                if word in vocab:
+                    try: matrix[vocab[word]] = np.array(tokens[1:], dtype=np.float32)
+                    except: continue
+        return matrix
+
+    # A. GloVe
+    if GLOVE_PATH:
+        glove_matrix = load_vectors(GLOVE_PATH, vocab, 200)
+        np.save(os.path.join(OUTPUT_DIR, 'emb_glove.npy'), glove_matrix)
     else:
-        seq = seq[:MAX_SEQ_LEN]
-    sequences.append(seq)
+        print("⚠️  GloVe file not found. Generating random placeholder.")
+        np.save(os.path.join(OUTPUT_DIR, 'emb_glove.npy'), np.random.normal(0, 1, (len(vocab), 200)))
 
-# Save processed dataframe with image paths and sequences
-df['sequence'] = sequences
-# Update image paths to be absolute for training
-df['abs_image_path'] = df.apply(lambda row: os.path.join(IMG_DIR, row['art_style'], row['painting'] + '.jpg'), axis=1)
-# Filter missing images
-df = df[df['abs_image_path'].apply(os.path.exists)]
+    # B. FastText
+    if FASTTEXT_PATH:
+        fasttext_matrix = load_vectors(FASTTEXT_PATH, vocab, 300)
+        np.save(os.path.join(OUTPUT_DIR, 'emb_fasttext.npy'), fasttext_matrix)
+    else:
+        print("⚠️  FastText file not found. Generating random placeholder.")
+        np.save(os.path.join(OUTPUT_DIR, 'emb_fasttext.npy'), np.random.normal(0, 1, (len(vocab), 300)))
 
-# Split
-train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
-val_df, test_df = train_test_split(test_df, test_size=0.5, random_state=42)
+    # C. TF-IDF + PCA
+    print("Calculating TF-IDF + PCA (Sampled Data)...")
+    corpus = [" ".join(clean_text(u)) for u in df['utterance']]
+    vectorizer = TfidfVectorizer(vocabulary=vocab, token_pattern=r"\b\w+\b")
+    X = vectorizer.fit_transform(corpus)
+    
+    svd = TruncatedSVD(n_components=200, random_state=42)
+    svd.fit(X) 
+    tfidf_matrix = svd.components_.T 
+    
+    final_tfidf = np.zeros((len(vocab), 200))
+    for word, idx in vocab.items():
+        if word in vectorizer.vocabulary_:
+            final_tfidf[idx] = tfidf_matrix[vectorizer.vocabulary_[word]]
+            
+    np.save(os.path.join(OUTPUT_DIR, 'emb_tfidf.npy'), final_tfidf)
 
-train_df.to_pickle(os.path.join(PROCESSED_DIR, "train_data.pkl"))
-val_df.to_pickle(os.path.join(PROCESSED_DIR, "val_data.pkl"))
-test_df.to_pickle(os.path.join(PROCESSED_DIR, "test_data.pkl"))
-print(f"Splits Saved: Train {len(train_df)}, Val {len(val_df)}, Test {len(test_df)}")
-
-# --- 4. GENERATE EMBEDDING MATRICES ---
-
-def create_embedding_matrix(name, embedding_dict, dim):
-    matrix = np.zeros((len(vocab), dim))
-    hits = 0
-    for word, i in vocab.items():
-        if word in embedding_dict:
-            matrix[i] = embedding_dict[word]
-            hits += 1
-        else:
-            # Random init for unknown words
-            matrix[i] = np.random.normal(scale=0.6, size=(dim,))
-    print(f"{name} Coverage: {hits}/{len(vocab)}")
-    return matrix
-
-# A. GloVe
-print("\nProcessing GloVe...")
-glove_index = {}
-if os.path.exists(GLOVE_FILE):
-    with open(GLOVE_FILE, encoding='utf-8') as f:
-        for line in f:
-            values = line.split()
-            word = values[0]
-            if word in vocab:
-                glove_index[word] = np.asarray(values[1:], dtype='float32')
-    glove_matrix = create_embedding_matrix("GloVe", glove_index, 200)
-    np.save(os.path.join(PROCESSED_DIR, "emb_glove.npy"), glove_matrix)
-else:
-    print("GloVe file not found. Skipping.")
-
-# B. FastText (Similar parsing to GloVe usually)
-print("\nProcessing FastText...")
-fasttext_index = {}
-if os.path.exists(FASTTEXT_FILE):
-    with open(FASTTEXT_FILE, encoding='utf-8') as f:
-        f.readline() # Skip header
-        for line in f:
-            values = line.split()
-            word = values[0]
-            if word in vocab:
-                fasttext_index[word] = np.asarray(values[1:], dtype='float32')
-    fasttext_matrix = create_embedding_matrix("FastText", fasttext_index, 300)
-    np.save(os.path.join(PROCESSED_DIR, "emb_fasttext.npy"), fasttext_matrix)
-else:
-    print(f"FastText file not found at {FASTTEXT_FILE}. Skipping.")
-
-# C. TF-IDF with PCA (TruncatedSVD)
-print("\nProcessing TF-IDF + PCA...")
-# We need word vectors, not document vectors.
-# Strategy: 
-# 1. Compute TF-IDF matrix for the corpus (N_docs x Vocab)
-# 2. Transpose to get (Vocab x N_docs) - creates a vector for each word
-# 3. Apply SVD to reduce N_docs dimensions down to 200
-corpus = [" ".join(clean_text(text)) for text in df['utterance']]
-tfidf = TfidfVectorizer(vocabulary=vocab, token_pattern=r"(?u)\b\w+\b")
-X = tfidf.fit_transform(corpus)
-
-# Transpose so rows = words
-X_T = X.T 
-svd = TruncatedSVD(n_components=200, random_state=42)
-tfidf_pca_matrix = svd.fit_transform(X_T) # Result: (Vocab_size, 200)
-
-print(f"TF-IDF Matrix Shape: {tfidf_pca_matrix.shape}")
-np.save(os.path.join(PROCESSED_DIR, "emb_tfidf_pca.npy"), tfidf_pca_matrix)
-
-print("\nPreprocessing Complete. Files saved to:", PROCESSED_DIR)
+print("\nPreprocessing Complete.")
