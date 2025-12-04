@@ -284,8 +284,9 @@ def evaluate_on_split(model, csv_path, num_samples=500):
 # 3. MODEL BLOCKS
 # ==========================================
 class Patches(layers.Layer):
-    def __init__(self, patch_size):
-        super().__init__()
+    def __init__(self, patch_size, **kwargs):
+        # Accept **kwargs so Keras can pass trainable, dtype, name, etc. on deserialization
+        super().__init__(**kwargs)
         self.patch_size = patch_size
 
     def call(self, images):
@@ -302,8 +303,9 @@ class Patches(layers.Layer):
         return patches
 
 class PatchEncoder(layers.Layer):
-    def __init__(self, num_patches, projection_dim):
-        super().__init__()
+    def __init__(self, num_patches, projection_dim, **kwargs):
+        # Accept **kwargs so Keras can pass trainable, dtype, name, etc. on deserialization
+        super().__init__(**kwargs)
         self.num_patches = num_patches
         self.projection = layers.Dense(units=projection_dim)
         self.position_embedding = layers.Embedding(
@@ -452,6 +454,22 @@ if __name__ == "__main__":
     if successful_trials:
         best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
         best_model = tuner.hypermodel.build(best_hps)
+
+        # =====================================
+        # Extra training of best model (longer)
+        # =====================================
+        print("\n--- Training best Transformer configuration longer ---")
+        history = best_model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=20,
+            callbacks=[
+                keras.callbacks.EarlyStopping(
+                    patience=3, restore_best_weights=True
+                )
+            ],
+        )
+
         best_model.save(os.path.join(DATA_DIR, "best_transformer_model.keras"))
         print("Best model saved to ../Data/best_transformer_model.keras")
 

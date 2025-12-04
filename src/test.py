@@ -78,8 +78,9 @@ def main():
         emotion = row["emotion"]
         reference_caption = str(row["utterance"])
 
+        # Use a shorter max_len at inference time for more concise captions
         generated_caption = generate_caption(
-            model, tokenizer, image_path, emotion, max_len=MAX_LEN
+            model, tokenizer, image_path, emotion, max_len=20
         )
 
         print(f"Example #{idx + 1}")

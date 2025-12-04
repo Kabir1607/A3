@@ -1,0 +1,19 @@
+Example #1
+Image path : ../Initial_Artworks_folder/Synthetic_Cubism/pablo-picasso_fruit-vase-and-bunch-of-grapes-1914.jpg
+Emotion    : contentment
+Reference  : texture filled piece that has a duller color palette
+Predicted  : embarrassing landscape embarrassing embarrassing embarrassing equipment embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing equipment equipment embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing tb cute equipment embarrassing embarrassing equipment landscape embarrassing embarrassing embarrassing landscape seated embarrassing embarrassing
+
+------------------------------------------------------------
+Example #2
+Image path : ../Initial_Artworks_folder/Naive_Art_Primitivism/william-h.-johnson_nat-turner-1945(1).jpg
+Emotion    : anger
+Reference  : It's horrifying to see a black man being lynched, especially when thinking that in 2020 we still need Black Lives Matter to advocate for equal rights
+Predicted  : photograph ugly embarrassing toy toy outside womens eventhough ugly embarrassing photograph toy flea flea flea posts photograph eventhough photograph womens photograph photograph innocence photograph eventhough inducing posts similar toy photograph similar posts similar posts photograph womens flea posts ranking
+
+------------------------------------------------------------
+Example #3
+Image path : ../Initial_Artworks_folder/New_Realism/edward-hopper_apartment-houses.jpg
+Emotion    : contentment
+Reference  : The colors and warm and inviting.
+Predicted  : embarrassing similar equipment embarrassing similar disembodied embarrassing embarrassing embarrassing embarrassing embarrassing similar equipment embarrassing embarrassing similar disembodied embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing similar outer seated embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing embarrassing disembodied mix embarrassing embarrassing
