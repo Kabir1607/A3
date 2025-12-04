@@ -1,0 +1,7 @@
+Initial dataset creation summary
+- Original CSV rows: 454684
+- Kept CSV rows: 206105
+- Rows dropped from CSV: 248579
+- Unique paintings kept: 36143
+- Estimated artworks deleted from WikiArt folder: 31
+
