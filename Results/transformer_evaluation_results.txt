@@ -1,0 +1,30 @@
+TRANSFORMER EVALUATION RESULTS (TEST SPLIT)
+===========================================
+
+Num samples evaluated: 500
+BLEU-1: 0.0000
+BLEU-2: 0.0000
+BLEU-4: 0.0000
+ROUGE-1 F1: 0.0000
+
+Sample qualitative examples:
+- Emotion   : amusement
+  Reference : i feel amusement when i look at the painting because all of these children playing in the park seem to be having a good time.
+  Predicted : smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking deception smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking smoking
+----------------------------------------
+- Emotion   : disgust
+  Reference : it seems badly painted such that the food looks gross.
+  Predicted : smoking smoking architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture smoking architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture smoking architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture
+----------------------------------------
+- Emotion   : excitement
+  Reference : it looks as though there are fun festivities going on with dancing, music and romance
+  Predicted : fascinating
+----------------------------------------
+- Emotion   : sadness
+  Reference : it is very dark, the head of the carriage(?) she is on looks evil and menacing, and there are three mysterious looking men that seem to be pulling her into darkness to die. almost all of the image is black except for the woman, who is very brightly painted. it makes me feel as if something pure is being pulled into disease, corruption, or death.
+  Predicted : fascinating alienation fascinating alienation fascinating alienation fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating alienation fascinating fascinating fascinating fascinating fascinating alienation fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating fascinating
+----------------------------------------
+- Emotion   : something else
+  Reference : this makes me feel overwhelmed with all the different kinds and colours of strokes. the colour ranges from dark black to bright yellow so it is too much going on.
+  Predicted : smoking smoking architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture architecture smoking architecture smoking architecture smoking architecture architecture architecture smoking architecture smoking architecture architecture architecture smoking architecture smoking architecture architecture architecture architecture architecture architecture architecture architecture
+----------------------------------------

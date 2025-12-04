@@ -145,37 +145,67 @@ def _tokens_to_caption(token_ids, tokenizer):
 
 
 def generate_caption(model, tokenizer, image_path, emotion_str, max_len=40):
-    """Greedy decoding: given image + emotion string -> caption text."""
+    """Greedy decoding: given image + emotion string -> caption text.
+
+    Note: The underlying model was trained with MAX_LEN tokens. We always feed a
+    caption input of length MAX_LEN to the model, but only decode up to
+    `min(max_len, MAX_LEN)` steps to control output length.
+    """
     if emotion_str not in EMOTION_TO_ID:
-        raise ValueError(f"Unknown emotion '{emotion_str}'. Known: {list(EMOTION_TO_ID.keys())}")
+        raise ValueError(
+            f"Unknown emotion '{emotion_str}'. Known: {list(EMOTION_TO_ID.keys())}"
+        )
     emotion_id = EMOTION_TO_ID[emotion_str]
 
     # Prepare image
     img = load_image(image_path)
     img = tf.expand_dims(img, axis=0)  # (1, H, W, 3)
 
-    # Start token
-    tokenizer = tokenizer
+    # Start / end tokens
     start_id = tokenizer.word_index.get("<start>")
     end_id = tokenizer.word_index.get("<end>")
     if start_id is None or end_id is None:
         raise ValueError("Tokenizer must contain <start> and <end> tokens.")
 
+    # We won't generate more than the model's MAX_LEN
+    decode_steps = min(max_len, MAX_LEN)
+
     seq = [start_id]
-    for i in range(1, max_len):
+    for _ in range(decode_steps - 1):
         cap_in = tf.constant(seq, dtype=tf.int32)
-        cap_in = tf.pad(cap_in, [[0, max_len - tf.shape(cap_in)[0]]])
-        cap_in = tf.expand_dims(cap_in, axis=0)  # (1, max_len)
+        # Always pad to model's MAX_LEN, not the requested decode length
+        pad_len = MAX_LEN - tf.shape(cap_in)[0]
+        cap_in = tf.pad(cap_in, [[0, pad_len]])
+        cap_in = tf.expand_dims(cap_in, axis=0)  # (1, MAX_LEN)
 
         emotion_tensor = tf.constant([emotion_id], dtype=tf.int32)
 
         preds = model.predict([img, emotion_tensor, cap_in], verbose=0)
-        next_id = int(tf.argmax(preds[0, i - 1, :]))
-        seq.append(next_id)
+        # Work on numpy array for easy masking
+        step_idx = len(seq) - 1
+        logits = preds[0, step_idx, :]
+
+        # Avoid predicting special tokens as normal words
+        if start_id is not None and start_id < logits.shape[-1]:
+            logits[start_id] = -1e9
+        # Often 0 is padding index
+        logits[0] = -1e9
+
+        # For the very first predicted token, strongly discourage immediate <end>
+        if len(seq) == 1 and end_id is not None and end_id < logits.shape[-1]:
+            logits[end_id] = -1e9
+
+        next_id = int(logits.argmax())
+
         if next_id == end_id:
             break
+        seq.append(next_id)
 
-    return _tokens_to_caption(seq, tokenizer)
+    caption = _tokens_to_caption(seq, tokenizer)
+    # Fallback: if caption ended up empty, at least return something sensible
+    if not caption:
+        return "<no caption generated>"
+    return caption
 
 
 def _rouge1_f1(reference_tokens, predicted_tokens):
