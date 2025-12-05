@@ -1,3 +1,4 @@
-TF-IDF: 4.5157
-GloVe: 4.3891
-FastText: 4.3444
+GloVe: 4.4120
+TF-IDF: 4.5877
+Learned: 4.3319
+WINNER: Learned
