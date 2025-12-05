@@ -1,0 +1,3 @@
+TF-IDF: 4.5157
+GloVe: 4.3891
+FastText: 4.3444

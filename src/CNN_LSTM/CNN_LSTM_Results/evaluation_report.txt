@@ -1,0 +1,2 @@
+Model: FastText
+BLEU-1 Score: 0.1278
