@@ -1,0 +1,22 @@
+--- Evaluation (Beam Search) ---
+Ref: It reminds me of lazy, warm holidays in France
+Pred: this painting makes me feel confused because i feel confused because i feel like this painting
+--------------------
+
+Ref: The children look poor since they have to go without shoes
+Pred: this painting makes me feel confused because i feel confused because i feel like this painting
+--------------------
+
+Ref: The art in this image is really bad.  I do not like it.
+Pred: this painting makes me feel confused because i feel confused because i feel like this painting
+--------------------
+
+Ref: the instruments evoke memories of musical events I have attended in the past
+Pred: this painting makes me feel confused because i feel confused because i feel like this painting
+--------------------
+
+Ref: Uncanny valley look about this kids face is unsettling
+Pred: this painting makes me feel sad because i feel like the painting
+--------------------
+
+Final BLEU-1 Score: 0.0771

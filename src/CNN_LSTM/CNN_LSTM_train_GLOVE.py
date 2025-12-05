@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 import os
 import pickle
-import re
 
 # --- CONFIG ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -54,6 +53,7 @@ class CaptionModel(nn.Module):
             nn.Dropout(0.5)
         )
         # Decoder
+        # Load GloVe weights
         self.embed = nn.Embedding.from_pretrained(torch.tensor(embed_mat, dtype=torch.float32), freeze=freeze_emb)
         self.lstm = nn.LSTM(EMBED_DIM, HIDDEN_DIM, batch_first=True)
         self.fc = nn.Linear(HIDDEN_DIM, vocab_size)
@@ -75,15 +75,10 @@ def train():
     
     with open(os.path.join(PROCESSED_DIR, "vocab.pkl"), "rb") as f: vocab = pickle.load(f)
 
-    # LOAD GLOVE MATRIX
-    try:
-        glove_mat = np.load(os.path.join(PROCESSED_DIR, "emb_glove.npy"))
-    except:
-        print("GloVe matrix not found! Using random.")
-        glove_mat = np.zeros((len(vocab), EMBED_DIM))
+    # LOAD GLOVE ONLY
+    glove_mat = np.load(os.path.join(PROCESSED_DIR, "emb_glove.npy"))
     
     print(f"\n>>> Training GloVe Model...")
-    # freeze_emb=True keeps GloVe weights static (as per assignment requirements)
     model = CaptionModel(len(vocab), glove_mat, freeze_emb=True).to(DEVICE)
     optim = torch.optim.Adam(model.parameters(), lr=0.001)
     crit = nn.CrossEntropyLoss(ignore_index=0)
@@ -116,6 +111,7 @@ def train():
         
         if avg_val < best_val_loss:
             best_val_loss = avg_val
+            # Save explicitly as GloVe
             torch.save(model.state_dict(), os.path.join(RESULTS_DIR, "best_model_GloVe.pth"))
 
     print(f"\n✅ GloVe Training Done. Saved to {RESULTS_DIR}/best_model_GloVe.pth")
