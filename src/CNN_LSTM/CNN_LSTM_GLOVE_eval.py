@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
 import pandas as pd
@@ -20,10 +20,11 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 EMBED_DIM = 100 
 HIDDEN_DIM = 256
 MAX_LEN = 20
+BEAM_WIDTH = 3  # Top 3 paths
 
-# --- MODEL ---
+# --- MODEL (Must match Training) ---
 class CaptionModel(nn.Module):
-    def __init__(self, vocab_size, embed_mat, freeze_emb=False):
+    def __init__(self, vocab_size, embed_mat, freeze_emb=True):
         super().__init__()
         self.cnn = nn.Sequential(
             nn.Conv2d(3, 32, 3), nn.ReLU(), nn.MaxPool2d(2),
@@ -47,74 +48,84 @@ class CaptionModel(nn.Module):
         out, _ = self.lstm(inputs)
         return self.fc(out)
 
-# --- GENERATE WITH TEMPERATURE ---
-def generate_caption(model, image, vocab, idx2word, max_len=20, temperature=0.8):
+# --- BEAM SEARCH GENERATION ---
+def generate_caption_beam(model, image, vocab, idx2word, max_len=20, k=3):
     model.eval()
     with torch.no_grad():
         img = image.unsqueeze(0).to(DEVICE)
         img_feat = model.img_proj(model.cnn(img)).unsqueeze(1)
         
-        inputs = img_feat
-        states = None
-        result = []
-        
-        next_word_idx = vocab['<start>']
+        # Tuple: (score, current_seq, (hidden, cell))
+        # We effectively perform "batch size = k" operations
+        candidates = [(0.0, [vocab['<start>']], None)]
         
         for _ in range(max_len):
-            word_tensor = torch.tensor([[next_word_idx]]).to(DEVICE)
-            word_emb = model.embed(word_tensor)
+            all_next_candidates = []
             
-            # For the first step, we technically used image. 
-            # For simplicity in this loop structure, we just feed the previous word embedding
-            # The LSTM state carries the image info from step 0 (handled outside loop in pure implementation, 
-            # but here we just chain inputs. Correct seq is Image -> Word -> Word)
-            
-            if len(result) == 0:
-                # First step: Image is already processed into hidden state? 
-                # Our model structure is concat. Let's do step-by-step manually:
-                out, states = model.lstm(inputs, states)
-            else:
-                out, states = model.lstm(word_emb, states)
+            for score, seq, states in candidates:
+                if seq[-1] == vocab['<end>']:
+                    all_next_candidates.append((score, seq, states))
+                    continue
+                
+                # Prepare input
+                if len(seq) == 1:
+                    # First step: Image Feature
+                    inputs = img_feat
+                    # LSTM step (image -> hidden)
+                    out, (h, c) = model.lstm(inputs, None)
+                else:
+                    # Subsequent steps: Word Embedding
+                    word_idx = seq[-1]
+                    word_tensor = torch.tensor([[word_idx]]).to(DEVICE)
+                    inputs = model.embed(word_tensor)
+                    out, (h, c) = model.lstm(inputs, states)
 
-            output = model.fc(out) # (1, 1, Vocab)
-            logits = output[0, 0, :] / temperature # Apply Temp
-            
-            # Block <unk> and repetition
-            logits[vocab['<unk>']] = -float('inf')
-            if len(result) > 0:
-                # Penalize previous word to prevent "very very very"
-                prev_idx = vocab.get(result[-1], 0)
-                logits[prev_idx] -= 3.0 
+                # Prediction
+                output = model.fc(out).squeeze(0).squeeze(0) # (Vocab_Size)
+                log_probs = torch.nn.functional.log_softmax(output, dim=0)
+                
+                # Get top k words
+                top_k_probs, top_k_ids = log_probs.topk(k)
+                
+                for i in range(k):
+                    word_idx = top_k_ids[i].item()
+                    added_score = top_k_probs[i].item()
+                    
+                    # Repetition Penalty (Soft)
+                    if len(seq) > 2 and word_idx == seq[-1]:
+                         added_score -= 10.0
 
-            # Sample from distribution
-            probs = torch.nn.functional.softmax(logits, dim=0)
-            next_word_idx = torch.multinomial(probs, 1).item()
+                    all_next_candidates.append((score + added_score, seq + [word_idx], (h, c)))
             
-            if next_word_idx == vocab['<end>']: break
+            # Sort by score and keep top k
+            candidates = sorted(all_next_candidates, key=lambda x: x[0], reverse=True)[:k]
             
-            word = idx2word.get(next_word_idx, '')
-            result.append(word)
-            
-    return " ".join(result)
+            # Early stop if all candidates ended
+            if all(c[1][-1] == vocab['<end>'] for c in candidates):
+                break
+                
+        # Return best sequence
+        best_seq = candidates[0][1]
+        words = [idx2word.get(idx, '') for idx in best_seq if idx not in [vocab['<start>'], vocab['<end>']]]
+        return " ".join(words)
 
 # --- MAIN ---
 if __name__ == "__main__":
-    print(f"--- Evaluating GloVe (Temperature Sampling) ---")
+    print(f"--- Evaluating GloVe with BEAM SEARCH (k={BEAM_WIDTH}) ---")
     with open(os.path.join(PROCESSED_DIR, "vocab.pkl"), "rb") as f: vocab = pickle.load(f)
     idx2word = {v: k for k, v in vocab.items()}
     
     test_df = pd.read_pickle(os.path.join(PROCESSED_DIR, "test.pkl"))
     
-    # Dummy matrix for shape
+    # Load Model
     dummy_mat = np.zeros((len(vocab), EMBED_DIM))
     model = CaptionModel(len(vocab), dummy_mat).to(DEVICE)
     
     if os.path.exists(MODEL_PATH):
         model.load_state_dict(torch.load(MODEL_PATH))
     else:
-        print("Model not found! Using random weights (Expect bad results)")
-    
-    model.eval()
+        print("Model not found! Run Training first.")
+        exit()
     
     print("\n=== Sample Captions ===")
     transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
@@ -125,22 +136,19 @@ if __name__ == "__main__":
         img = Image.open(row['abs_path']).convert("RGB")
         img_t = transform(img)
         
-        # Try temperature 0.7 or 0.8 for best balance
-        pred = generate_caption(model, img_t, vocab, idx2word, temperature=0.8)
+        pred = generate_caption_beam(model, img_t, vocab, idx2word, k=BEAM_WIDTH)
         print(f"Ref: {row['utterance']}")
         print(f"Pred: {pred}")
         print("-" * 30)
 
-    # Scoring
     print("\n=== Calculating BLEU ===")
     scores = []
+    # Subset for speed
     for i, row in test_df.head(200).iterrows():
         if not os.path.exists(row['abs_path']): continue
         img = Image.open(row['abs_path']).convert("RGB")
         img_t = transform(img)
-        
-        # Use lower temp for scoring to be more accurate/safe
-        pred = generate_caption(model, img_t, vocab, idx2word, temperature=0.1).split()
+        pred = generate_caption_beam(model, img_t, vocab, idx2word, k=BEAM_WIDTH).split()
         ref = re.sub(r'[^\w\s]', '', str(row['utterance']).lower()).split()
         
         try: score = sentence_bleu([ref], pred, weights=(1, 0, 0, 0), smoothing_function=SmoothingFunction().method1)
