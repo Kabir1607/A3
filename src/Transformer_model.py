@@ -1,290 +1,274 @@
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from PIL import Image
 import numpy as np
 import pandas as pd
 import os
-import re
 import pickle
-import ast
+import re
+import math
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 
 # ==========================================
-# 1. CONFIGURATION & LOADING
+# 1. CONFIGURATION
 # ==========================================
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
-PROCESSED_DIR = os.path.join(SCRIPT_DIR, "CNN_LSTM", "processed_data") # Re-use CNN data
-RESULTS_DIR = os.path.join(SCRIPT_DIR, "Results")
-DATA_DIR = os.path.join(BASE_DIR, "Data")
-IMG_DIR = os.path.join(SCRIPT_DIR, "Initial_Artworks_folder")
+PROCESSED_DIR = os.path.join(SCRIPT_DIR, "CNN_LSTM", "processed_data") 
+RESULTS_DIR = os.path.join(SCRIPT_DIR, "Transformer_Results")
+MODEL_PATH = os.path.join(RESULTS_DIR, "best_transformer.pth")
 
-# Check for Image Folder (Robust check)
-if not os.path.exists(IMG_DIR):
-    # Try finding it in the CNN folder if not here
-    fallback = os.path.join(SCRIPT_DIR, "CNN_LSTM", "Initial_Artworks_folder")
-    if os.path.exists(fallback): IMG_DIR = fallback
+# Robust Data Path Finder
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+possible_img_paths = [
+    os.path.join(SCRIPT_DIR, "Initial_Artworks_folder"),
+    os.path.join(SCRIPT_DIR, "CNN_LSTM", "Initial_Artworks_folder"),
+    os.path.join(PROJECT_ROOT, "Initial_Artworks_folder")
+]
+IMG_DIR = next((p for p in possible_img_paths if os.path.exists(p)), None)
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
-MODEL_PATH = os.path.join(DATA_DIR, "best_transformer_model.keras")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Constants
-IMAGE_SIZE = 224
-PATCH_SIZE = 32
-NUM_PATCHES = (IMAGE_SIZE // PATCH_SIZE) ** 2
-VOCAB_SIZE = 5000 # Matches your CNN_LSTM preprocessing
-MAX_LEN = 20      # Matches your CNN_LSTM preprocessing
-
-# HYPERPARAMETERS (Optimized)
-EMBED_DIM = 256   # Increased to match FastText/CNN output
-NUM_HEADS = 4     # More attention heads for better context
-FF_DIM = 256
-NUM_LAYERS = 2
-DROPOUT = 0.4
-LEARNING_RATE = 5e-4 # Slightly lower start
+# Hyperparameters
+BATCH_SIZE = 32
+EPOCHS = 10          # Enough to converge with pre-trained weights
+EMBED_DIM = 100      # Matches GloVe 100d
+NUM_HEADS = 4        # 4 Heads for better attention
+HIDDEN_DIM = 256     # Transformer FF dimension
+NUM_LAYERS = 2       # Depth
+DROPOUT = 0.4        # High dropout to prevent overfitting on small data
+MAX_LEN = 20
+VOCAB_SIZE = 5000
 
 # ==========================================
-# 2. LOAD PRE-TRAINED DATA
+# 2. DATASET
 # ==========================================
-print("Loading Pre-processed Data...")
-try:
-    # Load the vocab and dataframes created by CNN_LSTM_Preprocessing.py
-    with open(os.path.join(PROCESSED_DIR, "vocab.pkl"), "rb") as f:
-        VOCAB = pickle.load(f)
-    
-    # Load FastText Matrix (The "Secret Weapon")
-    EMBED_MATRIX = np.load(os.path.join(PROCESSED_DIR, "emb_fasttext.npy"))
-    print(f"Loaded FastText Matrix: {EMBED_MATRIX.shape}")
-    
-    # Load Dataframes
-    TRAIN_DF = pd.read_pickle(os.path.join(PROCESSED_DIR, "train_data.pkl"))
-    VAL_DF = pd.read_pickle(os.path.join(PROCESSED_DIR, "val_data.pkl"))
-    TEST_DF = pd.read_pickle(os.path.join(PROCESSED_DIR, "test_data.pkl"))
-
-except Exception as e:
-    print(f"CRITICAL ERROR: Could not load data from {PROCESSED_DIR}")
-    print("Run 'src/CNN_LSTM/CNN_LSTM_Preprocessing.py' first!")
-    exit()
+class ArtDataset(Dataset):
+    def __init__(self, pkl_path, transform):
+        self.df = pd.read_pickle(pkl_path)
+        self.transform = transform
+    def __len__(self): return len(self.df)
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        # Image
+        try: image = Image.open(row['abs_path']).convert("RGB")
+        except: image = Image.new('RGB', (224, 224))
+        image = self.transform(image)
+        # Caption
+        caption = torch.tensor(row['sequence'], dtype=torch.long)
+        return image, caption
 
 # ==========================================
-# 3. DATA GENERATOR
+# 3. TRANSFORMER MODEL
 # ==========================================
-def load_image(img_path):
-    img = tf.io.read_file(img_path)
-    img = tf.image.decode_jpeg(img, channels=3)
-    img = tf.image.resize(img, (IMAGE_SIZE, IMAGE_SIZE))
-    img = img / 255.0
-    return img
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0))
 
-def make_dataset(df, batch_size=32):
-    # Use the 'abs_image_path' and 'sequence' columns from preprocessing
-    image_paths = df['abs_image_path'].values
-    captions = list(df['sequence'].values)
-    
-    # Setup inputs/targets (Teacher Forcing)
-    # In:  <start> A painting
-    # Out: A painting <end>
-    cap_in = [c[:-1] for c in captions]
-    cap_out = [c[1:] for c in captions]
+    def forward(self, x):
+        return x + self.pe[:, :x.size(1)]
 
-    ds = tf.data.Dataset.from_tensor_slices((image_paths, cap_in, cap_out))
-
-    def map_func(img_path, c_in, c_out):
-        img = load_image(img_path)
-        return (img, c_in), c_out
-
-    ds = ds.map(map_func, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
-    return ds
-
-# ==========================================
-# 4. TRANSFORMER COMPONENTS
-# ==========================================
-class Patches(layers.Layer):
-    def __init__(self, patch_size, **kwargs):
-        super().__init__(**kwargs)
-        self.patch_size = patch_size
-    def call(self, images):
-        batch_size = tf.shape(images)[0]
-        patches = tf.image.extract_patches(
-            images=images, sizes=[1, self.patch_size, self.patch_size, 1],
-            strides=[1, self.patch_size, self.patch_size, 1], rates=[1, 1, 1, 1], padding="VALID"
-        )
-        patch_dims = patches.shape[-1]
-        patches = tf.reshape(patches, [batch_size, -1, patch_dims])
-        return patches
-    def get_config(self):
-        config = super().get_config()
-        config.update({"patch_size": self.patch_size})
-        return config
-
-class PatchEncoder(layers.Layer):
-    def __init__(self, num_patches, projection_dim, **kwargs):
-        super().__init__(**kwargs)
-        self.num_patches = num_patches
-        self.projection = layers.Dense(units=projection_dim)
-        self.position_embedding = layers.Embedding(input_dim=num_patches, output_dim=projection_dim)
-    def call(self, patch):
-        positions = tf.range(start=0, limit=self.num_patches, delta=1)
-        encoded = self.projection(patch) + self.position_embedding(positions)
-        return encoded
-    def get_config(self):
-        config = super().get_config()
-        config.update({"num_patches": self.num_patches, "projection_dim": self.projection.units})
-        return config
-
-def transformer_encoder_block(inputs, head_size, num_heads, ff_dim, dropout=0):
-    x = layers.LayerNormalization(epsilon=1e-6)(inputs)
-    x = layers.MultiHeadAttention(key_dim=head_size, num_heads=num_heads, dropout=dropout)(x, x)
-    res = x + inputs
-    x = layers.LayerNormalization(epsilon=1e-6)(res)
-    x = layers.Conv1D(filters=ff_dim, kernel_size=1, activation="relu")(x)
-    x = layers.Dropout(dropout)(x)
-    x = layers.Conv1D(filters=inputs.shape[-1], kernel_size=1)(x)
-    return x + res
-
-def transformer_decoder_block(inputs, context, head_size, num_heads, ff_dim, dropout=0):
-    # 1. Self Attention (Causal)
-    x = layers.LayerNormalization(epsilon=1e-6)(inputs)
-    x = layers.MultiHeadAttention(key_dim=head_size, num_heads=num_heads, dropout=dropout)(x, x, use_causal_mask=True)
-    res = x + inputs
-    # 2. Cross Attention
-    x = layers.LayerNormalization(epsilon=1e-6)(res)
-    x = layers.MultiHeadAttention(key_dim=head_size, num_heads=num_heads, dropout=dropout)(x, context)
-    res = x + res
-    # 3. Feed Forward
-    x = layers.LayerNormalization(epsilon=1e-6)(res)
-    x = layers.Conv1D(filters=ff_dim, kernel_size=1, activation="relu")(x)
-    x = layers.Dropout(dropout)(x)
-    x = layers.Conv1D(filters=inputs.shape[-1], kernel_size=1)(x)
-    return x + res
-
-# ==========================================
-# 5. BUILD & TRAIN
-# ==========================================
-def build_transformer():
-    image_input = layers.Input(shape=(IMAGE_SIZE, IMAGE_SIZE, 3), name="image_input")
-    caption_input = layers.Input(shape=(MAX_LEN-1,), name="caption_input") # -1 for shift
-
-    # --- IMAGE BRANCH ---
-    patches = Patches(PATCH_SIZE)(image_input)
-    encoded_patches = PatchEncoder(NUM_PATCHES, EMBED_DIM)(patches)
-
-    for _ in range(NUM_LAYERS):
-        encoded_patches = transformer_encoder_block(
-            encoded_patches, head_size=EMBED_DIM, num_heads=NUM_HEADS, ff_dim=FF_DIM, dropout=DROPOUT
-        )
-
-    # --- TEXT BRANCH (PRE-TRAINED) ---
-    # Initialize with FastText weights!
-    # Adjust dimension: FastText is 300, Model is 256. 
-    # If they mismatch, we project or slice. Here we rely on the Embedding layer trainable=True to adapt.
-    
-    if EMBED_MATRIX.shape[1] == EMBED_DIM:
-        # Perfect match
-        caption_embed = layers.Embedding(
-            VOCAB_SIZE, EMBED_DIM, 
-            embeddings_initializer=tf.keras.initializers.Constant(EMBED_MATRIX),
-            mask_zero=True, trainable=True # Fine-tune it
-        )(caption_input)
-    else:
-        # Mismatch (300 vs 256): Use FastText as generic init but project down
-        # Or just use random init if dimensions clash too much to keep it simple for deadline
-        print(f"Dimension Mismatch ({EMBED_MATRIX.shape[1]} vs {EMBED_DIM}). Using Random Init.")
-        caption_embed = layers.Embedding(VOCAB_SIZE, EMBED_DIM, mask_zero=True)(caption_input)
-
-    positions = tf.range(start=0, limit=MAX_LEN-1, delta=1)
-    pos_embed = layers.Embedding(input_dim=MAX_LEN, output_dim=EMBED_DIM)(positions)
-    caption_final = caption_embed + pos_embed
-
-    for _ in range(NUM_LAYERS):
-        caption_final = transformer_decoder_block(
-            caption_final, context=encoded_patches, 
-            head_size=EMBED_DIM, num_heads=NUM_HEADS, ff_dim=FF_DIM, dropout=DROPOUT
-        )
-
-    outputs = layers.Dense(VOCAB_SIZE, activation="softmax")(caption_final)
-
-    model = keras.Model(inputs=[image_input, caption_input], outputs=outputs)
-    
-    # --- OPTIMIZATION: Label Smoothing ---
-    # Helps prevent "her her her" loops by penalizing overconfidence
-    loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
-    
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=LEARNING_RATE),
-        loss=loss_fn,
-        metrics=["accuracy"]
-    )
-    return model
-
-# ==========================================
-# 6. EXECUTION
-# ==========================================
-if __name__ == "__main__":
-    print("--- Training Improved Transformer ---")
-    
-    train_ds = make_dataset(TRAIN_DF, batch_size=32)
-    val_ds = make_dataset(VAL_DF, batch_size=32)
-    
-    model = build_transformer()
-    
-    # Callbacks
-    callbacks = [
-        # Decay LR when stuck
-        keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=2, min_lr=1e-6),
-        # Stop if getting worse
-        keras.callbacks.EarlyStopping(patience=4, restore_best_weights=True)
-    ]
-    
-    history = model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=15, # Give it time to learn
-        callbacks=callbacks
-    )
-    
-    model.save(MODEL_PATH)
-    print(f"Saved improved model to {MODEL_PATH}")
-
-    # --- QUICK EVAL ---
-    print("\n--- Generating Samples (Test Set) ---")
-    
-    # Build Index-Word Map
-    idx2word = {v: k for k, v in VOCAB.items()}
-    
-    def generate_caption(image_path):
-        img = load_image(image_path)
-        img = tf.expand_dims(img, axis=0)
+class TransformerCaptioner(nn.Module):
+    def __init__(self, embed_dim, num_heads, hidden_dim, num_layers, vocab_size, embed_matrix=None):
+        super().__init__()
         
-        output = [VOCAB['<start>']]
-        for _ in range(MAX_LEN-1):
-            cap_in = tf.constant([output])
-            # Pad to expected length
-            cap_in = tf.pad(cap_in, [[0, (MAX_LEN-1) - tf.shape(cap_in)[1]]])
-            
-            preds = model.predict([img, cap_in], verbose=0)
-            
-            # Temperature Sampling (Soft choice)
-            logits = preds[0, len(output)-1, :] 
-            
-            # Block <unk> and repetition
-            logits[VOCAB['<unk>']] = -1e9
-            if len(output) > 1: logits[output[-1]] = -1e9
+        # 1. Image Encoder (CNN to patches logic simulated via Linear projection)
+        # We use a ResNet-style feature extractor or simple CNN. 
+        # For "From Scratch" assignment requirement, we use a custom CNN block.
+        self.cnn = nn.Sequential(
+            nn.Conv2d(3, 32, 3), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 3), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(64, 128, 3), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Flatten(),
+            nn.Linear(128 * 26 * 26, embed_dim), # Project to embedding size
+            nn.ReLU()
+        )
+        
+        # 2. Text Embedding
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        if embed_matrix is not None:
+            self.embedding.weight = nn.Parameter(torch.tensor(embed_matrix, dtype=torch.float32))
+            # We allow fine-tuning (freeze=False) so it adapts to Art terms
+        
+        self.pos_encoder = PositionalEncoding(embed_dim, MAX_LEN)
+        
+        # 3. Transformer Decoder
+        decoder_layer = nn.TransformerDecoderLayer(d_model=embed_dim, nhead=num_heads, dim_feedforward=hidden_dim, dropout=DROPOUT, batch_first=True)
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+        
+        self.fc_out = nn.Linear(embed_dim, vocab_size)
+        self.dropout = nn.Dropout(DROPOUT)
 
-            next_id = np.argmax(logits)
-            
-            if next_id == VOCAB['<end>']: break
-            output.append(next_id)
-            
-        return " ".join([idx2word.get(i, "") for i in output[1:]])
+    def forward(self, images, captions):
+        # Images: (Batch, C, H, W) -> (Batch, Embed_Dim) -> (Batch, 1, Embed_Dim)
+        img_features = self.cnn(images).unsqueeze(1)
+        
+        # Captions: (Batch, Seq_Len) -> (Batch, Seq_Len, Embed_Dim)
+        # Shifted right for teacher forcing (remove <end>)
+        tgt = self.embedding(captions[:, :-1]) 
+        tgt = self.pos_encoder(tgt)
+        tgt = self.dropout(tgt)
+        
+        # Causal Mask (Prevent peeking future)
+        sz = tgt.shape[1]
+        mask = torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1).to(DEVICE)
+        
+        # Decoder
+        # memory = image features
+        output = self.transformer_decoder(tgt, img_features, tgt_mask=mask)
+        return self.fc_out(output)
 
-    # Show 5 samples
-    samples = TEST_DF.sample(5)
-    with open(os.path.join(RESULTS_DIR, "transformer_improved_examples.txt"), "w") as f:
+# ==========================================
+# 4. GENERATION (BEAM SEARCH + PENALTIES)
+# ==========================================
+def generate_caption(model, image, vocab, idx2word, beam_width=3, alpha=0.9):
+    model.eval()
+    with torch.no_grad():
+        # Encode Image
+        img = image.unsqueeze(0).to(DEVICE)
+        img_memory = model.cnn(img).unsqueeze(1)
+        
+        # Start with <start>
+        # Tuple: (log_prob, sequence_indices)
+        candidates = [(0.0, [vocab['<start>']])]
+        
+        for _ in range(MAX_LEN):
+            next_candidates = []
+            for score, seq in candidates:
+                if seq[-1] == vocab['<end>']:
+                    next_candidates.append((score, seq))
+                    continue
+                
+                # Prepare input sequence
+                tgt_inp = torch.tensor([seq], dtype=torch.long).to(DEVICE)
+                tgt_emb = model.embedding(tgt_inp)
+                tgt_emb = model.pos_encoder(tgt_emb)
+                
+                # Pass through Transformer
+                # Note: Transformers re-process the whole sequence each step
+                out = model.transformer_decoder(tgt_emb, img_memory)
+                logits = model.fc_out(out[:, -1, :]) # Take last step
+                log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+                
+                # Top K
+                top_k_probs, top_k_ids = log_probs.topk(beam_width)
+                
+                for i in range(beam_width):
+                    word_idx = top_k_ids[0][i].item()
+                    p = top_k_probs[0][i].item()
+                    
+                    # --- PENALTIES ---
+                    # 1. Repetition Penalty: Hard block immediate repeats
+                    if len(seq) > 0 and word_idx == seq[-1]: p -= 10.0
+                    # 2. 'Bad Word' Penalty: Block <unk>
+                    if word_idx == vocab['<unk>']: p -= 10.0
+                    
+                    next_candidates.append((score + p, seq + [word_idx]))
+            
+            # Sort and Prune
+            candidates = sorted(next_candidates, key=lambda x: x[0], reverse=True)[:beam_width]
+            
+            # Stop if all finished
+            if all(c[1][-1] == vocab['<end>'] for c in candidates): break
+            
+    # Length Normalization (Prefer short captions? alpha < 1.0)
+    # Score = log_prob / (length ^ alpha)
+    best_seq = max(candidates, key=lambda x: x[0] / (len(x[1])**alpha))[1]
+    
+    words = [idx2word.get(i, '') for i in best_seq if i not in [vocab['<start>'], vocab['<end>']]]
+    return " ".join(words)
+
+# ==========================================
+# 5. TRAINING & EVALUATION
+# ==========================================
+def main():
+    print("--- Starting Final Transformer Training ---")
+    
+    # Load Data
+    transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
+    train_loader = DataLoader(ArtDataset(os.path.join(PROCESSED_DIR, "train.pkl"), transform), batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True)
+    test_df = pd.read_pickle(os.path.join(PROCESSED_DIR, "test.pkl"))
+    
+    with open(os.path.join(PROCESSED_DIR, "vocab.pkl"), "rb") as f: vocab = pickle.load(f)
+    idx2word = {v: k for k, v in vocab.items()}
+    
+    # Load Embeddings (GloVe)
+    try:
+        embed_matrix = np.load(os.path.join(PROCESSED_DIR, "emb_glove.npy"))
+        print("Loaded GloVe Embeddings.")
+    except:
+        print("GloVe not found. Using Random.")
+        embed_matrix = None
+
+    # Init Model
+    model = TransformerCaptioner(EMBED_DIM, NUM_HEADS, HIDDEN_DIM, NUM_LAYERS, len(vocab), embed_matrix).to(DEVICE)
+    
+    # Loss with Label Smoothing (Helps generalization)
+    criterion = nn.CrossEntropyLoss(ignore_index=vocab['<pad>'], label_smoothing=0.1)
+    optimizer = optim.Adam(model.parameters(), lr=0.0005)
+    
+    # Train
+    for epoch in range(EPOCHS):
+        model.train()
+        total_loss = 0
+        for img, cap in train_loader:
+            img, cap = img.to(DEVICE), cap.to(DEVICE)
+            optimizer.zero_grad()
+            
+            output = model(img, cap) # (Batch, Seq, Vocab)
+            target = cap[:, 1:]      # Shifted target
+            
+            loss = criterion(output.reshape(-1, len(vocab)), target.reshape(-1))
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            
+        print(f"Epoch {epoch+1}: Loss {total_loss/len(train_loader):.4f}")
+        
+    # Save
+    torch.save(model.state_dict(), MODEL_PATH)
+    print(f"Model saved to {MODEL_PATH}")
+    
+    # Evaluate
+    print("\n--- Evaluation (Beam Search) ---")
+    model.eval()
+    
+    # 1. Sample Captions
+    samples = test_df.sample(5)
+    with open(os.path.join(RESULTS_DIR, "samples.txt"), "w") as f:
         for _, row in samples.iterrows():
-            pred = generate_caption(row['abs_image_path'])
-            print(f"Ref: {' '.join(map(str, row['sequence']))}") # Raw seq for debug
-            print(f"Pred: {pred}")
-            print("-" * 30)
-            f.write(f"Pred: {pred}\n")
+            if not os.path.exists(row['abs_path']): continue
+            img = Image.open(row['abs_path']).convert("RGB")
+            pred = generate_caption(model, transform(img), vocab, idx2word)
+            log = f"Ref: {row['utterance']}\nPred: {pred}\n{'-'*20}\n"
+            print(log)
+            f.write(log)
+            
+    # 2. BLEU Score
+    scores = []
+    for _, row in test_df.head(200).iterrows():
+        try:
+            if not os.path.exists(row['abs_path']): continue
+            img = Image.open(row['abs_path']).convert("RGB")
+            pred = generate_caption(model, transform(img), vocab, idx2word).split()
+            ref = re.sub(r'[^\w\s]', '', str(row['utterance']).lower()).split()
+            score = sentence_bleu([ref], pred, weights=(1, 0, 0, 0), smoothing_function=SmoothingFunction().method1)
+            scores.append(score)
+        except: pass
+        
+    print(f"Final BLEU-1 Score: {np.mean(scores):.4f}")
+    with open(os.path.join(RESULTS_DIR, "metrics.txt"), "w") as f:
+        f.write(f"BLEU-1: {np.mean(scores):.4f}")
+
+if __name__ == "__main__":
+    main()
