@@ -1,0 +1,21 @@
+--- Evaluating GloVe (Temperature Sampling) ---
+
+=== Sample Captions ===
+Ref: The people enjoy a lovely summer day in the field.
+Pred: <start> the proportions are different and interesting color on this painting is with the picture
+------------------------------
+Ref: Three friends are hanging out together in the park and laying on the grass chatting.
+Pred: <start> the greens are dark and dark and blue and the trees is very so like she looks like they
+------------------------------
+Ref: A woman working content in her job, despite what it is.
+Pred: <start> the colors are unique part depressing
+------------------------------
+Ref: The woman in red looks like she is in a grave as the people pass by her.
+Pred: <start> this reminds me of a primary
+------------------------------
+Ref: Who spilled the ketchup and coffee?
+Pred: <start> the bright shape on the lines make me want
+------------------------------
+
+=== Calculating BLEU ===
+Average BLEU-1: 0.1228
